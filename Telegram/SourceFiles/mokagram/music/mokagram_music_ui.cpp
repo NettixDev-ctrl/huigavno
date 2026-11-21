@@ -7117,22 +7117,31 @@ protected:
 			barHeight);
 
 		// Сверху ряд вкладок по центру экрана, справа кнопка «свернуть».
-		result.verticalNav = width() < s(720);
 		const auto homeDetail = (_tab == Tab::Home && _homeAlbumOpen);
-		const auto inlineBack = homeDetail && width() >= s(960);
-		const auto reserve = inlineBack
+		const auto artistDetail = homeDetail && _homeArtistOpen;
+		const auto inlineBack = homeDetail && (artistDetail || width() >= s(960));
+		const auto back = QRect(s(24) + _filter->width(), margin, s(96), s(40));
+		const auto reserve = (inlineBack && !artistDetail)
 			? s(168)
 			: margin + _collapse->width() + s(8);
-		const auto navWidth = std::clamp(width() - 2 * reserve, 0, s(900));
-		result.nav = QRect((width() - navWidth) / 2, margin, navWidth, s(result.verticalNav ? 80 : 40));
+		const auto leftReserve = artistDetail ? back.x() + back.width() + s(8) : reserve;
+		const auto tabsBelow = artistDetail && (width() - leftReserve - reserve < s(240));
+		const auto navLeft = tabsBelow ? margin : leftReserve;
+		const auto navRight = tabsBelow ? margin : reserve;
+		const auto navWidth = std::clamp(width() - navLeft - navRight, 0, s(900));
+		result.verticalNav = width() < s(720) || (artistDetail && navWidth < s(540));
+		result.nav = QRect(
+			std::max((width() - navWidth) / 2, navLeft),
+			tabsBelow ? margin + s(40) + gap : margin,
+			navWidth,
+			s(result.verticalNav ? 80 : 40));
 		result.collapse = QPoint(
 			width() - margin - _collapse->width(),
 			margin + (s(40) - _collapse->height()) / 2);
 		auto top = result.nav.y() + result.nav.height() + gap;
 		if (homeDetail) {
 			if (inlineBack) {
-				result.homeBack = QRect(
-					s(24) + _filter->width(), result.nav.y(), s(96), result.nav.height());
+				result.homeBack = back;
 			} else {
 				result.homeBack = QRect(margin, top, s(128), s(36));
 				top += result.homeBack.height();

@@ -4325,10 +4325,6 @@ private:
 		const auto left = avatar.right() + s(17);
 		const auto right = narrow ? rect().right() - s(30) : _playArtist->x() - s(16);
 		const auto available = std::max(right - left + 1, 0);
-		p.setFont(st::normalFont);
-		p.setPen(st::windowSubTextFg);
-		p.drawText(QRect(left, identityTop + s(24), available, s(20)),
-			Qt::AlignVCenter | Qt::AlignLeft, PlaylistText("Исполнитель"));
 		auto title = st::semiboldFont->f;
 		title.setPixelSize(s(narrow ? 26 : 40));
 		p.setFont(title);

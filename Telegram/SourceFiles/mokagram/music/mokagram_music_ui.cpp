@@ -6525,6 +6525,7 @@ public:
 				openHomeArtist(_homeArtistProfile, _homeArtistSeed);
 				return;
 			}
+			animateHomeBackExit();
 			_homeAlbumOpen = false;
 			_homeArtistOpen = false;
 			_nav[1]->setActiveColor(Qt::white);
@@ -6986,6 +6987,7 @@ public:
 			return;
 		}
 		_closing = true;
+		stopHomeBackExit();
 		_ambientTimer.stop();
 		if (_cancelMotion) _cancelMotion();
 		_motionCover = nullptr;
@@ -7419,6 +7421,9 @@ protected:
 		_playbackBar->setVisible(layout.barShown);
 		_collapse->move(layout.collapse);
 		_filter->move(style::ConvertScale(16), layout.collapse.y());
+		if (_homeBackOverlay && (!layout.homeBack.isEmpty() || e->size() != e->oldSize())) {
+			stopHomeBackExit();
+		}
 		_homeBack->setGeometry(layout.homeBack);
 		_homeBack->setVisible(!layout.homeBack.isEmpty());
 		_queueToggle->move(layout.queue - barOrigin);
@@ -7898,6 +7903,43 @@ protected:
 		setHover(InfoHover::None);
 		_coverMorph.start([=] { update(); }, 0., 1., 360, anim::easeOutCubic);
 	}
+	void animateHomeBackExit() {
+		if (!_homeBack->isVisible() || anim::Disabled()
+			|| PowerSaving::On(PowerSaving::kAnimations)) {
+			return;
+		}
+		const auto image = Ui::GrabWidget(_homeBack);
+		if (image.isNull()) {
+			return;
+		}
+		const auto overlay = _homeBackOverlay.emplace(this);
+		overlay->setAttribute(Qt::WA_TransparentForMouseEvents);
+		overlay->setGeometry(_homeBack->geometry());
+		overlay->paintOn([=](QPainter &p) {
+			const auto hq = PainterHighQualityEnabler(p);
+			const auto progress = _homeBackExit.value(1.);
+			const auto center = QRectF(overlay->rect()).center();
+			const auto scale = 1. - 0.03 * progress;
+			p.setOpacity(1. - progress);
+			p.translate(center);
+			p.scale(scale, scale);
+			p.translate(-center);
+			p.drawPixmap(0, 0, image);
+		});
+		_homeBackExit.start([=](float64 progress) {
+			if (progress < 1.) {
+				overlay->update();
+			} else {
+				_homeBackOverlay.reset();
+			}
+		}, 0., 1., 140, anim::easeOutCubic);
+		overlay->show();
+		overlay->raise();
+	}
+	void stopHomeBackExit() {
+		_homeBackExit.stop();
+		_homeBackOverlay.reset();
+	}
 	void resetHomeNavigation() {
 		_homeSection = 0;
 		_homeAlbumOpen = false;
@@ -7915,6 +7957,7 @@ protected:
 			}
 			return;
 		}
+		stopHomeBackExit();
 		const auto from = _tab;
 		const auto animateTransition = _tab != Tab::Now
 			&& tab != Tab::Now
@@ -9915,6 +9958,8 @@ private:
 	const not_null<RoundGlyph*> _heart;
 	const not_null<RoundGlyph*> _collapse;
 	NavItem *_homeBack = nullptr;
+	base::unique_qptr<Ui::RpWidget> _homeBackOverlay;
+	Ui::Animations::Simple _homeBackExit;
 	Ui::RpWidget *_homeArtistBar = nullptr;
 	QGraphicsOpacityEffect *_homeArtistBarOpacity = nullptr;
 	Ui::RoundButton *_homeArtistBarPlay = nullptr;

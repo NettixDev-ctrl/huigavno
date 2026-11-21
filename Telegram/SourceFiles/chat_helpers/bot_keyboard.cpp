@@ -211,8 +211,9 @@ BotKeyboard::BotKeyboard(
 void BotKeyboard::paintEvent(QPaintEvent *e) {
 	Painter p(this);
 
+	// Mokagram: клавиатура ботов прозрачная, виден фон чата.
+	// Фон самих кнопок рисуется отдельно в Style::paintButtonBg.
 	auto clip = e->rect();
-	p.fillRect(clip, st::historyComposeAreaBg);
 
 	if (_impl) {
 		int x = rtl() ? st::botKbScroll.width : _st->margin;

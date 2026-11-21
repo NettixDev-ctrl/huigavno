@@ -876,6 +876,12 @@ HistoryWidget::HistoryWidget(
 		return false;
 	});
 	InitMessageFieldFade(_field, st::historyComposeField.textBg);
+	// Mokagram: плейсхолдер и текст по центру пилюли (шрифт садил их ниже на 3px).
+	_field->setAdditionalMargins(QMargins(
+		0,
+		-style::ConvertScale(3),
+		0,
+		style::ConvertScale(3)));
 
 	setupFastButtonMode();
 	initAiButton();

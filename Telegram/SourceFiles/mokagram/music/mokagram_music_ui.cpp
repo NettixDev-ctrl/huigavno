@@ -4155,6 +4155,13 @@ public:
 		}
 	}
 
+	[[nodiscard]] QColor artistBannerColor() {
+		return (prepareArtistBanner() && _bannerEdgeColor.isValid() && _bannerEdgeColor.alpha() > 0)
+			? anim::color(st::windowBg->c,
+				QColor::fromRgb(_bannerEdgeColor.rgb()), _bannerEdgeColor.alphaF())
+			: QColor();
+	}
+
 protected:
 	void resizeEvent(QResizeEvent *e) override {
 		RpWidget::resizeEvent(e);
@@ -4297,10 +4304,8 @@ private:
 		if (prepareArtistBanner()) {
 			const auto radius = s(BoxParts::kCardRadius);
 			const auto card = rect().adjusted(0, -radius, 0, -s(8));
-			const auto background = (_bannerEdgeColor.isValid() && _bannerEdgeColor.alpha() > 0)
-				? anim::color(st::windowBg->c,
-					QColor::fromRgb(_bannerEdgeColor.rgb()), _bannerEdgeColor.alphaF())
-				: st::windowBg->c;
+			const auto bannerColor = artistBannerColor();
+			const auto background = bannerColor.isValid() ? bannerColor : st::windowBg->c;
 			p.setPen(Qt::NoPen);
 			p.setBrush(background);
 			p.drawRoundedRect(card, radius, radius);
@@ -6109,13 +6114,22 @@ namespace {
 
 constexpr auto kFullscreenSide = 56;
 
+[[nodiscard]] QColor TintedNavTrack(const QColor &accent) {
+	return anim::color(st::windowBgOver->c, accent.darker(220), 0.65);
+}
+
 // Полноэкранный плеер: размытый цветной фон, крупный текст песни, тонкая полоса времени.
 // Пункт навигации полноэкранного плеера или кнопка возврата.
 class NavItem final : public Ui::AbstractButton {
 public:
-	NavItem(QWidget *parent, const QString &text, bool centered)
+	NavItem(
+		QWidget *parent,
+		const QString &text,
+		bool centered,
+		Fn<QColor()> bannerColor = nullptr)
 	: AbstractButton(parent)
 	, _text(text)
+	, _bannerColor(std::move(bannerColor))
 	, _centered(centered) {
 		setPointerCursor(true);
 		setFocusPolicy(Qt::TabFocus);
@@ -6171,12 +6185,25 @@ private:
 		auto font = st::semiboldFont->f;
 		font.setPixelSize(s(15));
 		p.setFont(font);
-		const auto inactive = isOver()
+		auto inactive = isOver()
 			? st::windowFg->c
 			: st::windowSubTextFg->c;
-		const auto active = _activeColor.isValid()
+		auto active = _activeColor.isValid()
 			? _activeColor
 			: st::windowFg->c;
+		const auto banner = _bannerColor ? _bannerColor() : QColor();
+		if (banner.isValid()) {
+			const auto contrastInk = [](const QColor &background) {
+				return Ui::CountContrast(background, Qt::white) >= Ui::CountContrast(background, Qt::black)
+					? QColor(Qt::white)
+					: QColor(Qt::black);
+			};
+			const auto track = TintedNavTrack(banner);
+			if (Ui::CountContrast(track, inactive) < 4.5) {
+				inactive = contrastInk(track);
+			}
+			active = contrastInk(banner);
+		}
 		p.setPen(anim::color(
 			inactive,
 			active,
@@ -6196,6 +6223,7 @@ private:
 	}
 
 	QString _text;
+	Fn<QColor()> _bannerColor;
 	QColor _activeColor;
 	Ui::Animations::Simple _fade;
 	bool _centered = false;
@@ -6589,7 +6617,8 @@ public:
 			const auto item = Ui::CreateChild<NavItem>(
 				this,
 				QString::fromUtf8(Mokagram::Lang::Tr(names[i])),
-				false);
+				false,
+				[=] { return homeArtistBannerColor(); });
 			item->setClickedCallback([=] { setTab(Tab(i)); });
 			_nav[i] = item;
 		}
@@ -8070,6 +8099,12 @@ protected:
 		}));
 	}
 
+	[[nodiscard]] QColor homeArtistBannerColor() {
+		return (_tab == Tab::Home && _homeArtistOpen && _homeAlbumHeader)
+			? _homeAlbumHeader->artistBannerColor()
+			: QColor();
+	}
+
 	void loadHomeAccent(const QString &url, int generation) {
 		_homeAccent = QColor();
 		_nav[1]->setActiveColor(Qt::white);
@@ -9118,19 +9153,23 @@ protected:
 		const auto layout = computeLayout();
 		// Одна общая дорожка и движущаяся пилюля вместо отдельных фонов вкладок.
 		p.setPen(Qt::NoPen);
-		const auto homeColor = (_tab == Tab::Home && _homeAlbumOpen && _homeAccent.isValid())
-			? _homeAccent : QColor();
+		const auto bannerColor = homeArtistBannerColor();
+		const auto homeColor = bannerColor.isValid()
+			? bannerColor
+			: ((_tab == Tab::Home && _homeAlbumOpen) ? _homeAccent : QColor());
 		// На «Сейчас играет» дорожка тоже берёт оттенок обложки.
 		const auto trackPlain = _plainAnim.value(_tab == Tab::Now ? 0. : 1.);
 		const auto trackTint = homeColor.isValid()
 			? homeColor
 			: (_accent.isValid() ? _accent : QColor());
-		p.setBrush(trackTint.isValid()
-			? anim::color(
-				anim::color(st::windowBgOver->c, trackTint.darker(220), 0.65),
-				st::windowBgOver->c,
-				homeColor.isValid() ? 0. : trackPlain)
-			: st::windowBgOver->c);
+		auto track = st::windowBgOver->c;
+		if (trackTint.isValid()) {
+			track = TintedNavTrack(trackTint);
+			if (!bannerColor.isValid()) {
+				track = anim::color(track, st::windowBgOver->c, homeColor.isValid() ? 0. : trackPlain);
+			}
+		}
+		p.setBrush(track);
 		p.drawRoundedRect(layout.nav, s(20), s(20));
 		const auto inset = s(4);
 		const auto segment = std::max(layout.nav.width() - 2 * inset, 0) / float64(layout.verticalNav ? 3 : _nav.size());

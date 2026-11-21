@@ -4112,6 +4112,7 @@ public:
 		if (_isArtist && !_bannerUrl.isEmpty()) {
 			LoadImage(_bannerUrl, crl::guard(this, [=](QImage image) {
 				if (image.isNull()) return;
+				_bannerAccent = ComputeAccent(image);
 				_banner = std::move(image);
 				_scaledBanner = QImage();
 				resizeToWidth(width());
@@ -4154,28 +4155,31 @@ public:
 	void paintArtistBanner(QPainter &p, QPoint origin) {
 		if (_banner.isNull()) return;
 
+		const auto fadeHeight = style::ConvertScale(48);
 		const auto bounds = QRect(
 			origin.x(), origin.y() - _bannerTopInset,
-			width(), artistBannerHeight() + _bannerTopInset);
+			width(), artistBannerHeight() + _bannerTopInset + fadeHeight);
 		if (bounds.isEmpty()) return;
-		if (_scaledBanner.isNull() || _scaledBannerSize != bounds.size()) {
-			_scaledBanner = _banner.scaled(
+		if (_scaledBanner.size() != bounds.size()) {
+			const auto scaled = _banner.scaled(
 				bounds.size(), Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation);
-			_scaledBannerSize = bounds.size();
+			const auto crop = QRect(
+				(scaled.width() - bounds.width()) / 2,
+				(scaled.height() - bounds.height()) / 2,
+				bounds.width(), bounds.height());
+			_scaledBanner = scaled.copy(crop).convertToFormat(
+				QImage::Format_ARGB32_Premultiplied);
+			if (_scaledBanner.isNull()) return;
+
+			const auto fadeTop = bounds.height() - fadeHeight;
+			auto fade = QLinearGradient(0, fadeTop, 0, bounds.height());
+			fade.setColorAt(0., Qt::black);
+			fade.setColorAt(1., Qt::transparent);
+			auto mask = QPainter(&_scaledBanner);
+			mask.setCompositionMode(QPainter::CompositionMode_DestinationIn);
+			mask.fillRect(0, fadeTop, bounds.width(), fadeHeight, fade);
 		}
-		p.drawImage(bounds, _scaledBanner, QRect(
-			(_scaledBanner.width() - bounds.width()) / 2,
-			(_scaledBanner.height() - bounds.height()) / 2,
-			bounds.width(), bounds.height()));
-		const auto fadeHeight = std::min(bounds.height(), style::ConvertScale(64));
-		const auto fadeRect = QRect(
-			bounds.x(), bounds.bottom() + 1 - fadeHeight, bounds.width(), fadeHeight);
-		auto fade = QLinearGradient(0, fadeRect.y(), 0, fadeRect.bottom() + 1);
-		auto transparent = st::windowBg->c;
-		transparent.setAlpha(0);
-		fade.setColorAt(0., transparent);
-		fade.setColorAt(1., st::windowBg->c);
-		p.fillRect(fadeRect, fade);
+		p.drawImage(bounds, _scaledBanner);
 	}
 
 protected:
@@ -4283,18 +4287,16 @@ private:
 
 		const auto identityTop = artistBannerHeight();
 		if (hasArtistBanner()) {
-			const auto identity = QRect(0, identityTop, width(), height() - identityTop - s(8));
-			BoxParts::PaintCard(p, identity.adjusted(0, -s(BoxParts::kCardRadius), 0, 0));
+			const auto radius = s(BoxParts::kCardRadius);
+			const auto card = rect().adjusted(0, -radius, 0, -s(8));
+			p.setPen(Qt::NoPen);
+			p.setBrush(_bannerAccent.isValid()
+				? anim::color(st::windowBg->c, _bannerAccent, 0.26)
+				: st::windowBg->c);
+			p.drawRoundedRect(card, radius, radius);
+			paintArtistBanner(p, QPoint());
 		}
 		const auto narrow = width() < s(520);
-		const auto banner = QRect(0, 0, width(), identityTop);
-		if (!banner.isEmpty()) {
-			p.save();
-			p.setClipRect(banner, Qt::IntersectClip);
-			p.fillRect(banner, st::windowBgOver);
-			paintArtistBanner(p, QPoint());
-			p.restore();
-		}
 
 		if (_artistIdentityOpacity <= 0.) return;
 		p.save();
@@ -4389,7 +4391,7 @@ private:
 	QSize _scaledArtSize;
 	QImage _banner;
 	QImage _scaledBanner;
-	QSize _scaledBannerSize;
+	QColor _bannerAccent;
 	Fn<void(QImage, QRect)> _showCover;
 	Fn<void()> _openArtist;
 	Ui::RoundButton *_playArtist = nullptr;

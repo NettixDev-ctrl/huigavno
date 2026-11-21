@@ -5576,11 +5576,36 @@ private:
 
 enum class Glyph { Previous, Next, Play, Add, Shuffle, Repeat, More, Block, Collapse, Queue, Filter };
 
+[[nodiscard]] QColor ContrastingForeground(const QColor &background) {
+	return Ui::CountContrast(background, Qt::white) >= Ui::CountContrast(background, Qt::black)
+		? QColor(Qt::white)
+		: QColor(Qt::black);
+}
+
+[[nodiscard]] QColor PaintBannerButton(
+		QPainter &p,
+		QRectF rect,
+		QColor background,
+		double hovered,
+		double pressed) {
+	background.setAlpha(255);
+	if (hovered > 0. || pressed > 0.) {
+		background = anim::color(
+			background, ContrastingForeground(background), 0.1 * hovered + 0.08 * pressed);
+	}
+	p.setPen(Qt::NoPen);
+	p.setBrush(background);
+	const auto radius = rect.height() / 2.;
+	p.drawRoundedRect(rect, radius, radius);
+	return ContrastingForeground(background);
+}
+
 class RoundGlyph final : public Ui::AbstractButton {
 public:
-	RoundGlyph(QWidget *parent, Glyph glyph, int size)
+	RoundGlyph(QWidget *parent, Glyph glyph, int size, Fn<QColor()> bannerBackground = nullptr)
 	: AbstractButton(parent)
-	, _glyph(glyph) {
+	, _glyph(glyph)
+	, _bannerBackground(std::move(bannerBackground)) {
 		resize(size, size);
 		setPointerCursor(true);
 		paintRequest(
@@ -5649,19 +5674,25 @@ private:
 		const auto down = _press.value(isDown() ? 1. : 0.);
 		const auto play = (_glyph == Glyph::Play);
 		const auto dark = (_glyph == Glyph::Collapse);
-		p.setPen(Qt::NoPen);
-		// Play: тёмный полупрозрачный круг с белым значком, как кнопки в шапке.
-		p.setBrush(play
-			? QColor(255, 255, 255, int(36 + 20 * over))
-			: dark
-			? QColor(0, 0, 0, int(80 + 50 * over))
-			: QColor(255, 255, 255, int(40 * over)));
 		p.translate(c);
 		const auto squeeze = 1. - 0.08 * down;
 		p.scale(squeeze, squeeze);
 		p.translate(-c);
-		p.drawEllipse(r);
-		const auto pen = QPen(Qt::white, 2.2, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
+		const auto background = _bannerBackground ? _bannerBackground() : QColor();
+		auto foreground = QColor(Qt::white);
+		if (background.isValid()) {
+			foreground = PaintBannerButton(p, r, background, over, down);
+		} else {
+			p.setPen(Qt::NoPen);
+			// Play: тёмный полупрозрачный круг с белым значком, как кнопки в шапке.
+			p.setBrush(play
+				? QColor(255, 255, 255, int(36 + 20 * over))
+				: dark
+				? QColor(0, 0, 0, int(80 + 50 * over))
+				: QColor(255, 255, 255, int(40 * over)));
+			p.drawEllipse(r);
+		}
+		const auto pen = QPen(foreground, 2.2, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
 		const auto u = r.width() / 48.;
 		if (_glyph == Glyph::Collapse) {
 			p.setPen(pen);
@@ -5963,6 +5994,7 @@ private:
 	}
 
 	Glyph _glyph;
+	Fn<QColor()> _bannerBackground;
 	QColor _accent = Qt::white;
 	bool _island = false;
 	bool _playing = false;
@@ -6126,10 +6158,12 @@ public:
 		QWidget *parent,
 		const QString &text,
 		bool centered,
-		Fn<QColor()> bannerColor = nullptr)
+		Fn<QColor()> bannerColor = nullptr,
+		Fn<QColor()> bannerBackground = nullptr)
 	: AbstractButton(parent)
 	, _text(text)
 	, _bannerColor(std::move(bannerColor))
+	, _bannerBackground(std::move(bannerBackground))
 	, _centered(centered) {
 		setPointerCursor(true);
 		setFocusPolicy(Qt::TabFocus);
@@ -6192,30 +6226,29 @@ private:
 			? _activeColor
 			: st::windowFg->c;
 		const auto banner = _bannerColor ? _bannerColor() : QColor();
-		if (banner.isValid()) {
-			const auto contrastInk = [](const QColor &background) {
-				return Ui::CountContrast(background, Qt::white) >= Ui::CountContrast(background, Qt::black)
-					? QColor(Qt::white)
-					: QColor(Qt::black);
-			};
+		const auto background = _bannerBackground ? _bannerBackground() : QColor();
+		if (background.isValid()) {
+			inactive = active = PaintBannerButton(p, rect(), background, isOver(), isDown());
+		} else if (banner.isValid()) {
 			const auto track = TintedNavTrack(banner);
 			if (Ui::CountContrast(track, inactive) < 4.5) {
-				inactive = contrastInk(track);
+				inactive = ContrastingForeground(track);
 			}
-			active = contrastInk(banner);
+			active = ContrastingForeground(banner);
 		}
 		p.setPen(anim::color(
 			inactive,
 			active,
 			_fade.value(_active ? 1. : 0.)));
-		const auto inset = std::min(s(_centered ? 6 : 16), width() / 2);
+		const auto centered = _centered || background.isValid();
+		const auto inset = std::min(s(centered ? 6 : 16), width() / 2);
 		const auto inner = rect().adjusted(inset, 0, -inset, 0);
 		p.drawText(
 			inner,
-			(_centered ? Qt::AlignHCenter : Qt::AlignLeft) | Qt::AlignVCenter,
+			(centered ? Qt::AlignHCenter : Qt::AlignLeft) | Qt::AlignVCenter,
 			QFontMetrics(font).elidedText(_text, Qt::ElideRight, inner.width()));
 		if (hasFocus()) {
-			p.setPen(QPen(st::windowFg->c, s(1)));
+			p.setPen(QPen(background.isValid() ? inactive : st::windowFg->c, s(1)));
 			p.setBrush(Qt::NoBrush);
 			p.drawRoundedRect(rect().adjusted(s(2), s(2), -s(2), -s(2)),
 				s(18), s(18));
@@ -6224,6 +6257,7 @@ private:
 
 	QString _text;
 	Fn<QColor()> _bannerColor;
+	Fn<QColor()> _bannerBackground;
 	QColor _activeColor;
 	Ui::Animations::Simple _fade;
 	bool _centered = false;
@@ -6451,7 +6485,8 @@ public:
 	, _seek(Ui::CreateChild<SeekBar>(_playbackBar, [=] { return playbackBarColor(); }))
 	, _heart(Ui::CreateChild<RoundGlyph>(_playbackBar, Glyph::Add, 44))
 	, _collapse(Ui::CreateChild<RoundGlyph>(this, Glyph::Collapse, 44))
-	, _filter(Ui::CreateChild<RoundGlyph>(this, Glyph::Filter, 44))
+	, _filter(Ui::CreateChild<RoundGlyph>(
+			this, Glyph::Filter, 44, [=] { return artistControlBackground(); }))
 	, _queueToggle(Ui::CreateChild<RoundGlyph>(_playbackBar, Glyph::Queue, 44))
 	, _volume(Ui::CreateChild<VolumeControl>(_playbackBar))
 	, _tabTransition(Ui::CreateChild<Ui::RpWidget>(this))
@@ -6474,7 +6509,12 @@ public:
 		_seek->setThin(true);
 		_seek->enableTimePreview();
 		_seek->setExpressive(true, false);
-		_homeBack = Ui::CreateChild<NavItem>(this, u"‹  "_q + QString::fromUtf8(Mokagram::Lang::Tr("Назад")), false);
+		_homeBack = Ui::CreateChild<NavItem>(
+			this,
+			u"‹  "_q + QString::fromUtf8(Mokagram::Lang::Tr("Назад")),
+			false,
+			nullptr,
+			[=] { return artistControlBackground(); });
 		_homeBack->setClickedCallback(crl::guard(this, [=] {
 			if (_homeArtistBackToSearch && _homeArtistOpen) {
 				setTab(Tab::Search);
@@ -8103,6 +8143,15 @@ protected:
 		return (_tab == Tab::Home && _homeArtistOpen && _homeAlbumHeader)
 			? _homeAlbumHeader->artistBannerColor()
 			: QColor();
+	}
+
+	[[nodiscard]] QColor artistControlBackground() {
+		if (_tab != Tab::Home || !_homeArtistOpen || !_homeAlbumHeader
+			|| !_homeAlbumHeader->hasArtistBanner()) {
+			return QColor();
+		}
+		const auto bannerColor = _homeAlbumHeader->artistBannerColor();
+		return bannerColor.isValid() ? TintedNavTrack(bannerColor) : st::windowBgOver->c;
 	}
 
 	void loadHomeAccent(const QString &url, int generation) {

@@ -5582,7 +5582,7 @@ enum class Glyph { Previous, Next, Play, Add, Shuffle, Repeat, More, Block, Coll
 		: QColor(Qt::black);
 }
 
-[[nodiscard]] QColor PaintBannerButton(
+[[nodiscard]] QColor PaintPlayerHeaderButton(
 		QPainter &p,
 		QRectF rect,
 		QColor background,
@@ -5602,10 +5602,10 @@ enum class Glyph { Previous, Next, Play, Add, Shuffle, Repeat, More, Block, Coll
 
 class RoundGlyph final : public Ui::AbstractButton {
 public:
-	RoundGlyph(QWidget *parent, Glyph glyph, int size, Fn<QColor()> bannerBackground = nullptr)
+	RoundGlyph(QWidget *parent, Glyph glyph, int size, Fn<QColor()> headerBackground = nullptr)
 	: AbstractButton(parent)
 	, _glyph(glyph)
-	, _bannerBackground(std::move(bannerBackground)) {
+	, _headerBackground(std::move(headerBackground)) {
 		resize(size, size);
 		setPointerCursor(true);
 		paintRequest(
@@ -5678,10 +5678,10 @@ private:
 		const auto squeeze = 1. - 0.08 * down;
 		p.scale(squeeze, squeeze);
 		p.translate(-c);
-		const auto background = _bannerBackground ? _bannerBackground() : QColor();
+		const auto background = _headerBackground ? _headerBackground() : QColor();
 		auto foreground = QColor(Qt::white);
 		if (background.isValid()) {
-			foreground = PaintBannerButton(p, r, background, over, down);
+			foreground = PaintPlayerHeaderButton(p, r, background, over, down);
 		} else {
 			p.setPen(Qt::NoPen);
 			// Play: тёмный полупрозрачный круг с белым значком, как кнопки в шапке.
@@ -5994,7 +5994,7 @@ private:
 	}
 
 	Glyph _glyph;
-	Fn<QColor()> _bannerBackground;
+	Fn<QColor()> _headerBackground;
 	QColor _accent = Qt::white;
 	bool _island = false;
 	bool _playing = false;
@@ -6159,11 +6159,11 @@ public:
 		const QString &text,
 		bool centered,
 		Fn<QColor()> bannerColor = nullptr,
-		Fn<QColor()> bannerBackground = nullptr)
+		Fn<QColor()> headerBackground = nullptr)
 	: AbstractButton(parent)
 	, _text(text)
 	, _bannerColor(std::move(bannerColor))
-	, _bannerBackground(std::move(bannerBackground))
+	, _headerBackground(std::move(headerBackground))
 	, _centered(centered) {
 		setPointerCursor(true);
 		setFocusPolicy(Qt::TabFocus);
@@ -6226,9 +6226,9 @@ private:
 			? _activeColor
 			: st::windowFg->c;
 		const auto banner = _bannerColor ? _bannerColor() : QColor();
-		const auto background = _bannerBackground ? _bannerBackground() : QColor();
+		const auto background = _headerBackground ? _headerBackground() : QColor();
 		if (background.isValid()) {
-			inactive = active = PaintBannerButton(p, rect(), background, isOver(), isDown());
+			inactive = active = PaintPlayerHeaderButton(p, rect(), background, isOver(), isDown());
 		} else if (banner.isValid()) {
 			const auto track = TintedNavTrack(banner);
 			if (Ui::CountContrast(track, inactive) < 4.5) {
@@ -6257,7 +6257,7 @@ private:
 
 	QString _text;
 	Fn<QColor()> _bannerColor;
-	Fn<QColor()> _bannerBackground;
+	Fn<QColor()> _headerBackground;
 	QColor _activeColor;
 	Ui::Animations::Simple _fade;
 	bool _centered = false;
@@ -6486,7 +6486,7 @@ public:
 	, _heart(Ui::CreateChild<RoundGlyph>(_playbackBar, Glyph::Add, 44))
 	, _collapse(Ui::CreateChild<RoundGlyph>(this, Glyph::Collapse, 44))
 	, _filter(Ui::CreateChild<RoundGlyph>(
-			this, Glyph::Filter, 44, [=] { return artistControlBackground(); }))
+			this, Glyph::Filter, 44, [=] { return headerControlBackground(); }))
 	, _queueToggle(Ui::CreateChild<RoundGlyph>(_playbackBar, Glyph::Queue, 44))
 	, _volume(Ui::CreateChild<VolumeControl>(_playbackBar))
 	, _tabTransition(Ui::CreateChild<Ui::RpWidget>(this))
@@ -6514,7 +6514,7 @@ public:
 			u"‹  "_q + QString::fromUtf8(Mokagram::Lang::Tr("Назад")),
 			false,
 			nullptr,
-			[=] { return artistControlBackground(); });
+			[=] { return headerControlBackground(); });
 		_homeBack->setClickedCallback(crl::guard(this, [=] {
 			if (_homeArtistBackToSearch && _homeArtistOpen) {
 				setTab(Tab::Search);
@@ -7221,7 +7221,7 @@ protected:
 			if (inlineBack) {
 				result.homeBack = back;
 			} else {
-				result.homeBack = QRect(margin, top, s(128), s(36));
+				result.homeBack = QRect(QPoint(margin, top), back.size());
 				top += result.homeBack.height();
 			}
 		}
@@ -8145,12 +8145,8 @@ protected:
 			: QColor();
 	}
 
-	[[nodiscard]] QColor artistControlBackground() {
-		if (_tab != Tab::Home || !_homeArtistOpen || !_homeAlbumHeader
-			|| !_homeAlbumHeader->hasArtistBanner()) {
-			return QColor();
-		}
-		const auto bannerColor = _homeAlbumHeader->artistBannerColor();
+	[[nodiscard]] QColor headerControlBackground() {
+		const auto bannerColor = homeArtistBannerColor();
 		return bannerColor.isValid() ? TintedNavTrack(bannerColor) : st::windowBgOver->c;
 	}
 

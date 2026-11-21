@@ -1395,7 +1395,7 @@ void ToggleLyricsPanel(
 	if (!Mokagram::Settings::Bool(u"lyrics.enabled"_q)
 		&& !controller->adaptive().isThreeColumn()
 		&& controller->canShowThirdSection()) {
-		Core::App().settings().setThirdSectionInfoEnabled(true);
+		controller->columns().setThirdSectionInfoEnabled(true);
 		Core::App().saveSettingsDelayed();
 		controller->resizeForThirdSection();
 		controller->updateColumnLayout();

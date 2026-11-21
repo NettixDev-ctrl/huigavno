@@ -7198,18 +7198,14 @@ protected:
 
 		// Сверху ряд вкладок по центру экрана, справа кнопка «свернуть».
 		const auto homeDetail = (_tab == Tab::Home && _homeAlbumOpen);
-		const auto artistDetail = homeDetail && _homeArtistOpen;
-		const auto inlineBack = homeDetail && (artistDetail || width() >= s(960));
 		const auto back = QRect(s(24) + _filter->width(), margin, s(96), s(40));
-		const auto reserve = (inlineBack && !artistDetail)
-			? s(168)
-			: margin + _collapse->width() + s(8);
-		const auto leftReserve = artistDetail ? back.x() + back.width() + s(8) : reserve;
-		const auto tabsBelow = artistDetail && (width() - leftReserve - reserve < s(240));
+		const auto reserve = margin + _collapse->width() + s(8);
+		const auto leftReserve = homeDetail ? back.x() + back.width() + s(8) : reserve;
+		const auto tabsBelow = homeDetail && (width() - leftReserve - reserve < s(240));
 		const auto navLeft = tabsBelow ? margin : leftReserve;
 		const auto navRight = tabsBelow ? margin : reserve;
 		const auto navWidth = std::clamp(width() - navLeft - navRight, 0, s(900));
-		result.verticalNav = width() < s(720) || (artistDetail && navWidth < s(540));
+		result.verticalNav = width() < s(720) || (homeDetail && navWidth < s(540));
 		result.nav = QRect(
 			std::max((width() - navWidth) / 2, navLeft),
 			tabsBelow ? margin + s(40) + gap : margin,
@@ -7218,15 +7214,10 @@ protected:
 		result.collapse = QPoint(
 			width() - margin - _collapse->width(),
 			margin + (s(40) - _collapse->height()) / 2);
-		auto top = result.nav.y() + result.nav.height() + gap;
 		if (homeDetail) {
-			if (inlineBack) {
-				result.homeBack = back;
-			} else {
-				result.homeBack = QRect(QPoint(margin, top), back.size());
-				top += result.homeBack.height();
-			}
+			result.homeBack = back;
 		}
+		const auto top = result.nav.y() + result.nav.height() + gap;
 		const auto areaBottom = result.bar.y() - gap;
 		const auto areaHeight = std::max(areaBottom - top, 0);
 
@@ -8188,9 +8179,16 @@ protected:
 			: QColor();
 	}
 
-	[[nodiscard]] QColor headerControlBackground() {
+	[[nodiscard]] QColor homeDetailAccent() {
 		const auto bannerColor = homeArtistBannerColor();
-		return bannerColor.isValid() ? TintedNavTrack(bannerColor) : st::windowBgOver->c;
+		return bannerColor.isValid()
+			? bannerColor
+			: ((_tab == Tab::Home && _homeAlbumOpen) ? _homeAccent : QColor());
+	}
+
+	[[nodiscard]] QColor headerControlBackground() {
+		const auto accent = homeDetailAccent();
+		return accent.isValid() ? TintedNavTrack(accent) : st::windowBgOver->c;
 	}
 
 	void loadHomeAccent(const QString &url, int generation) {
@@ -9241,10 +9239,7 @@ protected:
 		const auto layout = computeLayout();
 		// Одна общая дорожка и движущаяся пилюля вместо отдельных фонов вкладок.
 		p.setPen(Qt::NoPen);
-		const auto bannerColor = homeArtistBannerColor();
-		const auto homeColor = bannerColor.isValid()
-			? bannerColor
-			: ((_tab == Tab::Home && _homeAlbumOpen) ? _homeAccent : QColor());
+		const auto homeColor = homeDetailAccent();
 		// На «Сейчас играет» дорожка тоже берёт оттенок обложки.
 		const auto trackPlain = _plainAnim.value(_tab == Tab::Now ? 0. : 1.);
 		const auto trackTint = homeColor.isValid()
@@ -9253,8 +9248,8 @@ protected:
 		auto track = st::windowBgOver->c;
 		if (trackTint.isValid()) {
 			track = TintedNavTrack(trackTint);
-			if (!bannerColor.isValid()) {
-				track = anim::color(track, st::windowBgOver->c, homeColor.isValid() ? 0. : trackPlain);
+			if (!homeColor.isValid()) {
+				track = anim::color(track, st::windowBgOver->c, trackPlain);
 			}
 		}
 		p.setBrush(track);

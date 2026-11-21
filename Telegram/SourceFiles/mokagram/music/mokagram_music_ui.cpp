@@ -9079,20 +9079,6 @@ protected:
 				p.fillRect(panel, anim::color(st::boxBg->c, _homeAccent, 0.26));
 			}
 			artistHeader->paintArtistBanner(p, QPoint(_tabScroll->x(), top - offset));
-			if (bannerBottom > 0) {
-				p.setOpacity(1.);
-				const auto edge = std::min(top, bannerBottom);
-				auto shade = QLinearGradient(0, 0, 0, std::max(edge, 1));
-				auto topColor = st::boxBg->c;
-				topColor.setAlphaF(0.62);
-				auto bottomColor = st::boxBg->c;
-				bottomColor.setAlphaF(std::clamp(
-					(offset + s(24) - bannerHeight) / double(s(24)), 0., 1.));
-				shade.setColorAt(0., topColor);
-				shade.setColorAt(0.72, topColor);
-				shade.setColorAt(1., bottomColor);
-				p.fillRect(panel, shade);
-			}
 			p.restore();
 		}
 		if (_tab == Tab::Home && _homeAlbumOpen && !_homeArtistOpen) {

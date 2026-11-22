@@ -102,6 +102,9 @@ struct Library {
 	o.insert("art", t.artworkUrl);
 	o.insert("link", t.permalink);
 	o.insert("dur", t.durationMs);
+	if (t.unavailable) {
+		o.insert("unavailable", true);
+	}
 	o.insert("aid", t.artistId);
 	o.insert("artistArt", t.artistArtworkUrl);
 	o.insert("genre", t.genre);
@@ -127,6 +130,7 @@ struct Library {
 	t.artworkUrl = o.value("art").toString();
 	t.permalink = o.value("link").toString();
 	t.durationMs = o.value("dur").toInt();
+	t.unavailable = o.value("unavailable").toBool();
 	t.artistId = o.value("aid").toString();
 	t.artistArtworkUrl = o.value("artistArt").toString();
 	t.genre = o.value("genre").toString();

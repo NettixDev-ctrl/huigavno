@@ -164,10 +164,19 @@ void SearchLimited(
 	int limit,
 	Fn<void(std::vector<Track>)> done);
 
+using AudioFileDone = Fn<void(const QString &path, const QString &error)>;
+
 // Скачивает трек (HLS склеивается) в кэш и отдаёт путь к файлу. Уже скачанный отдаётся сразу.
 void Download(
 	const Track &track,
-	Fn<void(const QString &path, const QString &error)> done);
+	AudioFileDone done);
+
+// Объединяет запросы к одному файлу и обновляет общий LRU кэша аудио.
+void LoadCachedAudio(
+	const QString &key,
+	const QString &cachedPath,
+	Fn<void(AudioFileDone)> load,
+	AudioFileDone done);
 
 // Картинка по ссылке (обложки). Результат кэшируется в памяти.
 void LoadImage(const QString &url, Fn<void(QImage)> done);

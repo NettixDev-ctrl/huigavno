@@ -618,8 +618,8 @@ void TrimAudioCache(const QString &protectPath) {
 	const auto dir = QDir(CacheDir());
 	const auto files = dir.entryInfoList(
 		{ u"*.m4a"_q, u"*.mp3"_q, u"yt-*.webm"_q }, QDir::Files, QDir::Time);
-	auto total = qint64(0);
-	auto count = 0;
+	auto total = QFileInfo(protectPath).size();
+	auto count = 1;
 	for (const auto &file : files) {
 		if (file.absoluteFilePath() == protectPath) {
 			continue;
@@ -1641,6 +1641,28 @@ void MarkAudioCacheUsed(const QString &path) {
 	TrimAudioCache(path);
 }
 
+void LoadCachedAudio(
+		const QString &key,
+		const QString &cachedPath,
+		Fn<void(AudioFileDone)> load,
+		AudioFileDone done) {
+	const auto cached = QFileInfo(cachedPath);
+	if (cached.isFile() && cached.size() > 0) {
+		TouchCacheFile(cachedPath);
+		done(cachedPath, {});
+		return;
+	}
+	static auto loading = std::map<QString, std::vector<AudioFileDone>>();
+	const auto [entry, started] = loading.try_emplace(key);
+	entry->second.push_back(std::move(done));
+	if (!started) return;
+	load([key](const QString &path, const QString &error) {
+		if (!path.isEmpty() && error.isEmpty()) MarkAudioCacheUsed(path);
+		const auto result = loading.extract(key);
+		for (const auto &callback : result.mapped()) callback(path, error);
+	});
+}
+
 void Search(
 		const QString &query,
 		int offset,
@@ -1675,12 +1697,10 @@ void Search(
 
 namespace {
 
-using DownloadDone = Fn<void(const QString &, const QString &)>;
-
-void DownloadStream(const Track &track, DownloadDone done) {
+void DownloadStream(const Track &track, AudioFileDone done) {
 	const auto path = CachePath(track);
-	if (QFile::exists(path)) {
-		TouchCacheFile(path);
+	const auto cached = QFileInfo(path);
+	if (cached.isFile() && cached.size() > 0) {
 		done(path, QString());
 		return;
 	}
@@ -1731,11 +1751,10 @@ void TryDownloadStreams(
 		const std::shared_ptr<std::vector<TrackStream>> &streams,
 		size_t index,
 		const QString &firstError,
-		DownloadDone done) {
+		AudioFileDone done) {
 	if (index == streams->size()) {
 		const auto path = LegacyAudioPath(track.id);
 		if (!path.isEmpty()) {
-			TouchCacheFile(path);
 			done(path, QString());
 			return;
 		}
@@ -1758,61 +1777,41 @@ void TryDownloadStreams(
 
 } // namespace
 
-void Download(const Track &track, DownloadDone done) {
+void Download(const Track &track, AudioFileDone done) {
 	const auto path = CachePath(track);
 	if (path.isEmpty()) {
 		done({}, QString::fromUtf8(Mokagram::Lang::Tr("некорректный id трека")));
 		return;
 	}
 	const auto cached = track.transcodingUrl.isEmpty() ? LegacyAudioPath(track.id) : path;
-	if (!cached.isEmpty() && QFile::exists(cached)) {
-		TouchCacheFile(cached);
-		done(cached, QString());
-		return;
-	}
-	// Предзагрузка и воспроизведение делят одну загрузку, включая запасные потоки.
-	static auto loading = std::map<QString, std::vector<DownloadDone>>();
-	if (const auto i = loading.find(path); i != loading.end()) {
-		i->second.push_back(std::move(done));
-		return;
-	}
-	loading[path].push_back(std::move(done));
-	const auto finish = [=](const QString &result, const QString &error) {
-		if (!result.isEmpty() && error.isEmpty()) {
-			TrimAudioCache(result);
-		}
-		auto waiters = std::move(loading.at(path));
-		loading.erase(path);
-		for (const auto &waiter : waiters) {
-			waiter(result, error);
-		}
-	};
-	DownloadStream(track, [=](const QString &result, const QString &firstError) {
-		if (firstError.isEmpty()) {
-			finish(result, firstError);
-			return;
-		}
-		ApiGet(QString::fromLatin1(kApi) + u"/tracks/"_q + track.id,
-			QUrlQuery(),
-			[=](QByteArray data, QString error) {
-				const auto fresh = QJsonDocument::fromJson(data).object();
-				auto streams = error.isEmpty()
-					? ParseStreams(fresh)
-					: std::vector<TrackStream>();
-				auto refreshed = track;
-				refreshed.authorization = fresh.value("track_authorization").toString();
-				if (refreshed.authorization == track.authorization) {
-					std::erase_if(streams, [&](const TrackStream &stream) {
-						return stream.url == track.transcodingUrl;
-					});
-				}
-				TryDownloadStreams(refreshed,
-					std::make_shared<std::vector<TrackStream>>(std::move(streams)),
-					0,
-					firstError,
-					finish);
-			});
-	});
+	LoadCachedAudio(path, cached, [=](AudioFileDone finish) {
+		DownloadStream(track, [=](const QString &result, const QString &firstError) {
+			if (firstError.isEmpty()) {
+				finish(result, firstError);
+				return;
+			}
+			ApiGet(QString::fromLatin1(kApi) + u"/tracks/"_q + track.id,
+				QUrlQuery(),
+				[=](QByteArray data, QString error) {
+					const auto fresh = QJsonDocument::fromJson(data).object();
+					auto streams = error.isEmpty()
+						? ParseStreams(fresh)
+						: std::vector<TrackStream>();
+					auto refreshed = track;
+					refreshed.authorization = fresh.value("track_authorization").toString();
+					if (refreshed.authorization == track.authorization) {
+						std::erase_if(streams, [&](const TrackStream &stream) {
+							return stream.url == track.transcodingUrl;
+						});
+					}
+					TryDownloadStreams(refreshed,
+						std::make_shared<std::vector<TrackStream>>(std::move(streams)),
+						0,
+						firstError,
+						finish);
+				});
+		});
+	}, std::move(done));
 }
 
 namespace {

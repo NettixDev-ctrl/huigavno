@@ -273,6 +273,7 @@ struct Queue {
 	QString forYouNote;
 	int tab = 0;                     // 0 поиск, 1 лайкнутые, 2 для вас
 	Track current;                   // играющий трек (с разобранными ссылками)
+	DocumentId fallbackDocumentId = 0;
 	bool recorded = true;            // прослушивание уже записано в историю
 	QString lastQuery;
 	bool custom = false;             // очередь собрана вручную
@@ -300,6 +301,28 @@ Queue &QueueState() {
 
 [[nodiscard]] bool IsTelegramTrack(const Track &track) {
 	return track.id.startsWith(u"telegram:"_q);
+}
+
+[[nodiscard]] QString YouTubeMusicQuery(const Track &track) {
+	const auto artist = track.artist.simplified();
+	const auto title = track.title.simplified();
+	if (!track.id.toULongLong() || artist.isEmpty() || title.isEmpty()) {
+		return {};
+	}
+	const auto query = u"moka:music:v1:%1\n%2\n%3"_q
+		.arg(std::max(track.durationMs / 1000, 0)).arg(artist, title);
+	return (query.size() <= 256) ? query : QString();
+}
+
+[[nodiscard]] bool CanPlayTrack(const Track &track) {
+	return !track.unavailable || !YouTubeMusicQuery(track).isEmpty();
+}
+
+[[nodiscard]] bool IsYouTubeMusicPlayback(const AudioMsgId &id) {
+	const auto &queue = QueueState();
+	return id.audio() && !id.contextId()
+		&& id.audio()->id == queue.fallbackDocumentId
+		&& &id.audio()->session() == queue.session.get();
 }
 
 [[nodiscard]] HistoryItem *TrackMessage(const Track &track) {
@@ -331,6 +354,7 @@ void BindController(not_null<Window::SessionController*> controller) {
 		queue.results.clear();
 		queue.searchResults.clear();
 		queue.current = {};
+		queue.fallbackDocumentId = 0;
 		queue.currentId.clear();
 		queue.lastQuery.clear();
 		queue.index = -1;
@@ -612,10 +636,88 @@ void LoadLocalArtwork(const Track &track, Fn<void(QImage)> done) {
 	return document;
 }
 
-void PlayIndex(int index);
+void PlayIndex(int index, bool skipUnavailable = false);
 void RefillStream();
 void Subscribe();
 void PrefetchUpcoming();
+
+void RequestYouTubeMusic(
+		not_null<Main::Session*> session,
+		not_null<UserData*> bot,
+		const QString &query,
+		int retries,
+		Fn<bool()> valid,
+		Fn<void(DocumentData*)> done) {
+	session->api().request(MTPmessages_GetInlineBotResults(
+		MTP_flags(0),
+		bot->inputUser(),
+		MTP_inputPeerSelf(),
+		MTPInputGeoPoint(),
+		MTP_string(query),
+		MTP_string()
+	)).done([=](const MTPmessages_BotResults &result) {
+		if (!valid()) return;
+		if (result.type() == mtpc_messages_botResults) {
+			for (const auto &item : result.c_messages_botResults().vresults().v) {
+				if (item.type() == mtpc_botInlineMediaResult) {
+					const auto &media = item.c_botInlineMediaResult();
+					if (const auto file = media.vdocument(); file
+						&& qs(media.vid()).startsWith(u"ready:"_q)) {
+						const auto document = session->data().processDocument(*file);
+						if (document->isSong()) {
+							done(document);
+							return;
+						}
+					}
+				} else if (retries > 0 && item.type() == mtpc_botInlineResult
+					&& qs(item.c_botInlineResult().vid()) == u"moka:music:pending"_q) {
+					QTimer::singleShot(2000, [=] {
+						if (valid()) {
+							RequestYouTubeMusic(session, bot, query, retries - 1, valid, done);
+						}
+					});
+					return;
+				}
+			}
+		}
+		done(nullptr);
+	}).fail([=] {
+		if (valid()) done(nullptr);
+	}).send();
+}
+
+void LoadYouTubeMusic(
+		not_null<Main::Session*> session,
+		const QString &query,
+		Fn<bool()> valid,
+		Fn<void(DocumentData*)> done) {
+	const auto username = u"saveinator_bot"_q;
+	const auto ask = [=](UserData *bot) {
+		if (!valid()) return;
+		if (!bot || !bot->isBot()) {
+			done(nullptr);
+			return;
+		}
+		RequestYouTubeMusic(session, bot, query, 20, valid, done);
+	};
+	if (const auto peer = session->data().peerByUsername(username)) {
+		ask(peer->asUser());
+		return;
+	}
+	session->api().request(MTPcontacts_ResolveUsername(
+		MTP_flags(0),
+		MTP_string(username),
+		MTP_string()
+	)).done([=](const MTPcontacts_ResolvedPeer &result) {
+		if (!valid()) return;
+		const auto &data = result.c_contacts_resolvedPeer();
+		session->data().processUsers(data.vusers());
+		const auto peer = session->data().peerLoaded(peerFromMTP(data.vpeer()));
+		ask(peer ? peer->asUser() : nullptr);
+	}).fail([=] {
+		if (valid()) done(nullptr);
+	}).send();
+}
 
 void ResolveThen(const Track &track, Fn<void(Track, QString)> done) {
 	if (!track.transcodingUrl.isEmpty()) {
@@ -812,6 +914,7 @@ void CommitRadio(
 		PlayIndex(0);
 	} else if (!keepPlaying) {
 		queue.current = seed;
+		queue.fallbackDocumentId = 0;
 		queue.recorded = false;
 		const auto document = MakeDocument(&controller->session(), seed, path);
 		LoadImage(ArtUrl(seed.artworkUrl, u"t500x500"_q), [id = document->id](QImage image) {
@@ -1024,7 +1127,7 @@ void PrefetchUpcoming() {
 		; left > 0 && i < int(queue.tracks.size())
 		; ++i) {
 		const auto &track = queue.tracks[i];
-		if (IsTelegramTrack(track) || !track.id.toULongLong()) {
+		if (track.unavailable || IsTelegramTrack(track) || !track.id.toULongLong()) {
 			continue;
 		}
 		--left;
@@ -1077,7 +1180,7 @@ void Subscribe() {
 				return;
 			} else if (queue.radio || queue.stream) {
 				if (queue.index + 1 < count) {
-					PlayIndex(queue.index + 1);
+					PlayIndex(queue.index + 1, true);
 				} else {
 					queue.waiting = true;
 					RefillStream();
@@ -1090,7 +1193,7 @@ void Subscribe() {
 				}
 				PlayIndex(next);
 			} else if (queue.index + 1 < count) {
-				PlayIndex(queue.index + 1);
+				PlayIndex(queue.index + 1, true);
 			} else if (settings.playerRepeatMode() == Media::RepeatMode::All
 				&& count > 0) {
 				PlayIndex(0);
@@ -1105,7 +1208,7 @@ void Subscribe() {
 	}, queue.lifetime);
 }
 
-void PlayIndex(int index) {
+void PlayIndex(int index, bool skipUnavailable) {
 	auto &queue = QueueState();
 	const auto controller = queue.controller.get();
 	if (!controller || index < 0 || index >= int(queue.tracks.size())) {
@@ -1136,11 +1239,56 @@ void PlayIndex(int index) {
 			return;
 		}
 		queue.current = track;
+		queue.fallbackDocumentId = 0;
 		queue.recorded = true;
 		Media::Player::instance()->play(
 			AudioMsgId(document, item->fullId()),
 			std::nullopt);
 		PrefetchUpcoming();
+		return;
+	}
+	const auto playDocument = [](not_null<DocumentData*> document, const Track &resolved) {
+		auto &queue = QueueState();
+		LoadImage(ArtUrl(resolved.artworkUrl, u"t500x500"_q), [id = document->id](QImage image) {
+			SetCover(id, std::move(image));
+			QueueState().changes.fire({});
+		});
+		queue.current = resolved;
+		queue.fallbackDocumentId = resolved.unavailable ? document->id : 0;
+		queue.recorded = false;
+		Media::Player::instance()->play(AudioMsgId(document, FullMsgId()), std::nullopt);
+		RecordRecentTrack(resolved);
+		if ((queue.radio || queue.stream)
+			&& int(queue.tracks.size()) - queue.index - 1 <= 3) {
+			RefillStream();
+		}
+		PrefetchUpcoming();
+	};
+	if (track.unavailable) {
+		const auto query = YouTubeMusicQuery(track);
+		if (query.isEmpty()) return;
+		const auto playback = Media::Player::instance()->current(AudioMsgId::Type::Song);
+		const auto valid = [=] {
+			const auto &queue = QueueState();
+			return queue.controller && queue.session && token == queue.pendingToken
+				&& queue.index >= 0 && queue.index < int(queue.tracks.size())
+				&& queue.tracks[queue.index].id == track.id
+				&& Media::Player::instance()->current(AudioMsgId::Type::Song) == playback;
+		};
+		if (!skipUnavailable) {
+			controller->showToast(QString::fromUtf8(Lang::Tr("Загружаю: ")) + track.title);
+		}
+		LoadYouTubeMusic(&controller->session(), query, valid, [=](DocumentData *document) {
+			auto &queue = QueueState();
+			if (document) {
+				playDocument(document, track);
+			} else if (skipUnavailable && queue.index + 1 < int(queue.tracks.size())) {
+				PlayIndex(queue.index + 1, true);
+			} else if (const auto controller = queue.controller.get()) {
+				controller->showToast(QString::fromUtf8(Lang::Tr(
+					"Не удалось воспроизвести трек из YouTube Music")));
+			}
+		});
 		return;
 	}
 	ResolveThen(track, [=](Track resolved, QString error) {
@@ -1168,22 +1316,7 @@ void PlayIndex(int index) {
 				controller->showToast(QString::fromUtf8(Mokagram::Lang::Tr("Не удалось загрузить: ")) + error);
 				return;
 			}
-			const auto document = MakeDocument(&controller->session(), resolved, path);
-			LoadImage(ArtUrl(resolved.artworkUrl, u"t500x500"_q), [id = document->id](QImage image) {
-				SetCover(id, std::move(image));
-				QueueState().changes.fire({});
-			});
-			queue.current = resolved;
-			queue.recorded = false;
-			Media::Player::instance()->play(
-				AudioMsgId(document, FullMsgId()),
-				std::nullopt);
-			RecordRecentTrack(resolved);
-			if ((queue.radio || queue.stream)
-				&& int(queue.tracks.size()) - index - 1 <= 3) {
-				RefillStream();
-			}
-			PrefetchUpcoming();
+			playDocument(MakeDocument(&controller->session(), resolved, path), resolved);
 		});
 	});
 }
@@ -1953,7 +2086,7 @@ private:
 
 };
 
-void PlayAll(const std::vector<Track> &tracks) {
+void PlayAll(const std::vector<Track> &tracks, bool skipUnavailable = false) {
 	auto &queue = QueueState();
 	if (tracks.empty()) {
 		return;
@@ -1972,7 +2105,7 @@ void PlayAll(const std::vector<Track> &tracks) {
 			queue.autoIds.insert(t.id);
 		}
 	}
-	PlayIndex(0);
+	PlayIndex(0, skipUnavailable);
 }
 
 class TrackLikeButton final : public Ui::AbstractButton {
@@ -2293,14 +2426,14 @@ public:
 				showMenu(controller, resultIndex >= 0 ? resultIndex : index, &event);
 			});
 		}
-		const auto unavailable = _mode == RowMode::Album && _track.unavailable;
+		const auto unavailable = !CanPlayTrack(_track);
 		const auto unavailableText = QString::fromUtf8(Mokagram::Lang::Tr("Недоступен для воспроизведения"));
 		setAccessibleName(_track.title + u" - "_q + _track.artist
 			+ (unavailable ? u" · "_q + unavailableText : QString()));
 		if (unavailable) {
 			setDisabled(true);
 			setToolTip(unavailableText);
-		} else if (!IsTelegramTrack(_track)) {
+		} else if (!_track.unavailable && !IsTelegramTrack(_track)) {
 			_likeButton = Ui::CreateChild<TrackLikeButton>(this, _track);
 		}
 		if (_mode != RowMode::Home) {
@@ -2387,13 +2520,14 @@ public:
 			return e->type() == QEvent::ContextMenu;
 		}) | rpl::on_next([=](not_null<QEvent*> e) {
 			e->accept();
-			if (!_track.unavailable) {
+			if (CanPlayTrack(_track)) {
 				showMenu(controller, playIndex, static_cast<QContextMenuEvent*>(e.get()));
 			}
 		}, lifetime());
 	}
 
 	void setTextLinks(Fn<void(Track)> title, Fn<void(const Track&, const QString&)> artist) {
+		if (_track.unavailable) return;
 		_titleLink = makeTextLink(_track.title, [=] { title(_track); });
 		_artistNames = TrackArtistNames(_track);
 		for (const auto &name : _artistNames) {
@@ -2576,9 +2710,14 @@ private:
 			this,
 			st::popupMenuWithIcons);
 		const auto track = _track;
-		AddRadioAction(_menu.get(), controller, track);
+		if (!track.unavailable) AddRadioAction(_menu.get(), controller, track);
 		const auto add = [&](const QString &text, Fn<void()> callback, const style::icon *icon) {
 			_menu->addAction(text, std::move(callback), icon);
+		};
+		const auto popup = [&] {
+			_menu->popup(event->reason() == QContextMenuEvent::Keyboard
+				? mapToGlobal(rect().center())
+				: event->globalPos());
 		};
 		add(QString::fromUtf8(Mokagram::Lang::Tr("Воспроизвести")), [=] {
 			if (_mode == RowMode::Queue) {
@@ -2592,12 +2731,14 @@ private:
 				PlayFromResults(index);
 			}
 		}, &st::menuIconSoundOn);
-		add(IsLiked(track.id)
-			? QString::fromUtf8(Mokagram::Lang::Tr("Убрать из избранного"))
-			: QString::fromUtf8(Mokagram::Lang::Tr("В избранное")), [=] {
-			SetLiked(track, !IsLiked(track.id));
-		}, &st::menuIconFave);
-		AddToPlaylistMenu(_menu.get(), controller, track);
+		if (!track.unavailable) {
+			add(IsLiked(track.id)
+				? QString::fromUtf8(Mokagram::Lang::Tr("Убрать из избранного"))
+				: QString::fromUtf8(Mokagram::Lang::Tr("В избранное")), [=] {
+				SetLiked(track, !IsLiked(track.id));
+			}, &st::menuIconFave);
+			AddToPlaylistMenu(_menu.get(), controller, track);
+		}
 		if (!_playlistId.isEmpty()) {
 			add(PlaylistText("Убрать из плейлиста"), [=] {
 				RemovePlaylistTrack(_playlistId, track.id);
@@ -2610,6 +2751,10 @@ private:
 			add(QString::fromUtf8(Mokagram::Lang::Tr("Выше")), [=] { QueueMove(index, -1); }, &st::menuIconAbove);
 			add(QString::fromUtf8(Mokagram::Lang::Tr("Ниже")), [=] { QueueMove(index, 1); }, &st::menuIconBelow);
 			add(QString::fromUtf8(Mokagram::Lang::Tr("Убрать из очереди")), [=] { QueueRemove(index); }, &st::menuIconDelete);
+		}
+		if (track.unavailable) {
+			popup();
+			return;
 		}
 		if (CanForwardTrack(track)) {
 			add(QString::fromUtf8(Mokagram::Lang::Tr("Переслать")), [=] {
@@ -2630,9 +2775,7 @@ private:
 				controller->showToast(QString::fromUtf8(Mokagram::Lang::Tr("Ссылка скопирована")));
 			}, &st::menuIconLink);
 		}
-		_menu->popup(event->reason() == QContextMenuEvent::Keyboard
-			? mapToGlobal(rect().center())
-			: event->globalPos());
+		popup();
 	}
 
 	void paint() {
@@ -2725,7 +2868,7 @@ private:
 			return;
 		}
 		const auto item = TrackMessage(_track);
-		const auto subtitle = _track.unavailable
+		const auto subtitle = !CanPlayTrack(_track)
 			? _track.artist + u" · "_q + QString::fromUtf8(Mokagram::Lang::Tr("Недоступен для воспроизведения"))
 			: item
 			? _track.artist + u" · "_q + item->history()->peer->name()
@@ -3542,9 +3685,8 @@ public:
 							controller->showToast(error);
 							return;
 						}
-						tracks.erase(std::remove_if(tracks.begin(), tracks.end(),
-							[](const Track &track) { return track.unavailable; }), tracks.end());
-						PlayAll(tracks);
+						std::erase_if(tracks, [](const Track &track) { return !CanPlayTrack(track); });
+						PlayAll(tracks, true);
 					}));
 				}));
 			} else {
@@ -6067,7 +6209,7 @@ Track details::PlayingTrack() {
 	const auto &track = QueueState().current;
 	if (OwnsTrack(current)
 		&& !track.id.isEmpty()
-		&& document->id == DocumentIdForTrack(track.id)) {
+		&& (IsYouTubeMusicPlayback(current) || document->id == DocumentIdForTrack(track.id))) {
 		return track;
 	}
 	if (const auto item = document->session().data().message(current.contextId())) {
@@ -8339,7 +8481,7 @@ protected:
 	void playHomeArtist() {
 		auto results = _homeArtistTracks;
 		std::erase_if(results, [](const Track &track) {
-			return track.unavailable;
+			return !CanPlayTrack(track);
 		});
 		if (results.empty()) return;
 
@@ -8371,8 +8513,7 @@ protected:
 		_homeArtistBarPlay->setFullWidth(std::min(s(144), std::max(width - s(44), 0) / 2));
 		_homeArtistBarPlay->moveToRight(
 			s(22), (height - _homeArtistBarPlay->height()) / 2);
-		_homeArtistBarPlay->setDisabled(std::ranges::all_of(
-			_homeArtistTracks, &Track::unavailable));
+		_homeArtistBarPlay->setDisabled(std::ranges::none_of(_homeArtistTracks, CanPlayTrack));
 		_homeArtistBar->raise();
 		_homeArtistBar->update();
 	}
@@ -8651,14 +8792,14 @@ protected:
 		const auto addRows = [&](const std::vector<Track> &tracks, RowMode mode = RowMode::Results, QString playlistId = {}) {
 			auto playable = std::make_shared<std::vector<Track>>();
 			for (const auto &track : tracks) {
-				if (!track.unavailable) {
+				if (CanPlayTrack(track)) {
 					playable->push_back(track);
 				}
 			}
 			QueueState().results = *playable;
 			auto resultIndex = 0;
 			for (auto i = 0; i != int(tracks.size()); ++i) {
-				const auto index = tracks[i].unavailable ? -1 : resultIndex++;
+				const auto index = CanPlayTrack(tracks[i]) ? resultIndex++ : -1;
 				const auto row = _tabList->add(object_ptr<Row>(
 					_tabList,
 					_controller,
@@ -8709,8 +8850,7 @@ protected:
 					})), QMargins(0, 0, 0, style::ConvertScale(8)));
 				_homeAlbumHeader = albumHeader;
 				albumHeader->setBannerTopInset(_tabScroll->y());
-				albumHeader->setArtistPlayable(!std::ranges::all_of(
-					_homeArtistTracks, &Track::unavailable));
+				albumHeader->setArtistPlayable(std::ranges::any_of(_homeArtistTracks, CanPlayTrack));
 				if (!_homeAlbumIsTrack && !_homeArtistOpen) InstallAlbumContextMenu(albumHeader, _controller, _homeAlbum);
 
 				if (_homeArtistOpen) {
@@ -10334,7 +10474,8 @@ QColor CurrentCoverAccent() {
 
 bool OwnsTrack(const AudioMsgId &id) {
 	return id.audio()
-		&& (id.audio()->id & 0xFFFFFF0000000000ULL) == 0x4D4F4B0000000000ULL;
+		&& ((id.audio()->id & 0xFFFFFF0000000000ULL) == 0x4D4F4B0000000000ULL
+			|| IsYouTubeMusicPlayback(id));
 }
 
 bool UsesQueue(const AudioMsgId &id) {
@@ -10344,6 +10485,7 @@ bool UsesQueue(const AudioMsgId &id) {
 		return false;
 	}
 	if (OwnsTrack(id)) {
+		if (IsYouTubeMusicPlayback(id)) return queue.currentId == queue.current.id;
 		return !queue.currentId.startsWith(u"telegram:"_q)
 			&& id.audio()->id == DocumentIdForTrack(queue.currentId);
 	}
@@ -12013,7 +12155,7 @@ void ShowMusicBoxWith(
 						list,
 						albums->opened->title,
 						[=] { crl::on_main(box, [=] { (*closeAlbum)(); }); },
-						[=] { PlayAll(albums->openedTracks); }),
+						[=] { PlayAll(albums->openedTracks, true); }),
 					QMargins(10, 0, 16, 6));
 			}
 			if (queue.tab == 1 && !queue.telegramSearch) {

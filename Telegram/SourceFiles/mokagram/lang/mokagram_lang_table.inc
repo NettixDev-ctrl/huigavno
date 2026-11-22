@@ -1223,6 +1223,7 @@
 	{ "Слушать альбом", "Play album" },
 	{ "Треки", "Tracks" },
 	{ "Недоступен для воспроизведения", "Unavailable for playback" },
+	{ "Не удалось воспроизвести трек из YouTube Music", "Could not play this track from YouTube Music" },
 	{ "Не удалось загрузить треки альбома. Попробуйте снова.", "Could not load album tracks. Try again." },
 	{ "Недавно", "Recently played" },
 	{ "Альбом", "Album" },

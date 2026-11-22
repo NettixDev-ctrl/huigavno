@@ -171,6 +171,8 @@ PRIVATE
     mokagram/music/mokagram_soundcloud.h
     mokagram/music/mokagram_soundcloud_login.cpp
     mokagram/music/mokagram_soundcloud_login.h
+    mokagram/music/mokagram_youtube_music.cpp
+    mokagram/music/mokagram_youtube_music.h
     mokagram/plugins/mokagram_plugin_api.cpp
     mokagram/plugins/mokagram_plugin_api.h
     mokagram/plugins/mokagram_plugin_install.cpp

@@ -1396,6 +1396,14 @@ void TopBar::setupUserpicButton(
 				this,
 				[=](Mokagram::Music::Presence::Track track) {
 					_listeningTrack = std::move(track);
+					if (_listeningTrack && !_listeningRingTimer) {
+						_listeningRingTimer = std::make_unique<base::Timer>([=] {
+							update();
+						});
+						_listeningRingTimer->callEach(30);
+					} else if (!_listeningTrack && _listeningRingTimer) {
+						_listeningRingTimer.reset();
+					}
 					_userpicButton->setAccessibleName(_listeningTrack
 						? _listeningTrack.title
 						: tr::lng_mediaview_profile_photo(tr::now));
@@ -2995,7 +3003,7 @@ void TopBar::paintEvent(QPaintEvent *e) {
 		paintUserpic(p, geometry);
 		// Mokagram: the listening ring fits inside the story outline.
 		if (_listeningTrack && _progress.current() > 0.85) {
-			Mokagram::Music::Presence::PaintRing(p, geometry);
+			Mokagram::Music::Presence::PaintRing(p, geometry, crl::now());
 		}
 		paintStoryOutline(p, geometry);
 	}

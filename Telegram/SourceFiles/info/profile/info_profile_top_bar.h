@@ -275,6 +275,7 @@ private:
 	const int _minForProgress;
 	std::unique_ptr<PillsRow> _pills;
 	Mokagram::Music::Presence::Track _listeningTrack;
+	std::unique_ptr<base::Timer> _listeningRingTimer;
 	rpl::variable<int> _pillsReserve = 0;
 
 	std::unique_ptr<Ui::GlareTooltip> _badgeTooltip;

@@ -735,6 +735,7 @@ private:
 	int _visibleTop = 0;
 	int _visibleBottom = 0;
 	Mokagram::Music::Presence::Tracks _listeningTracks;
+	std::unique_ptr<base::Timer> _listeningRingTimer;
 	uint64 _listeningAvatarPressed = 0;
 	QString _filter, _hashtagFilter;
 

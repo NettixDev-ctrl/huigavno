@@ -2654,13 +2654,14 @@ void Message::paintFromName(
 		nameAvailableWidth);
 	const auto iconsLeft = availableLeft + nameWidth;
 	if (mokaBadge) {
+		const auto badgeSize = Ui::Emoji::GetCustomSizeNormal();
+		const auto badgeTop = trect.top()
+			+ (st::msgNameFont->height - badgeSize) / 2;
 		clearCustomEmojiRepaint();
 		mokaBadge->paint(p, {
 			.textColor = nameFg,
 			.now = context.now,
-			.position = QPoint(
-				iconsLeft,
-				trect.top() + (st::msgNameFont->height - mokaBadge->height()) / 2),
+			.position = QPoint(iconsLeft, badgeTop),
 			.paused = context.paused || On(PowerSaving::kEmojiStatus),
 		});
 	}

@@ -26,7 +26,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "mokagram/misc/mokagram_datereg.h"
 #include "mokagram/notes/mokagram_notes.h"
 #include "mokagram/music/mokagram_music_presence.h"
+#include "mokagram/music/mokagram_music_ui.h"
 #include "mokagram/music/mokagram_soundcloud.h"
+#include "mokagram/settings/mokagram_settings.h"
 #include "mokagram/ui/mokagram_box_parts.h"
 
 #include <QtGui/QPainterPath>
@@ -51,6 +53,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/business/data_business_info.h"
 #include "data/components/credits.h"
 #include "data/data_changes.h"
+#include "data/data_audio_msg_id.h"
 #include "data/data_channel.h"
 #include "data/data_chat.h"
 #include "data/data_chat_filters.h"
@@ -89,6 +92,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "iv/iv_instance.h"
 #include "lang/lang_keys.h"
 #include "main/main_session.h"
+#include "media/audio/media_audio.h"
+#include "media/player/media_player_instance.h"
 #include "menu/menu_mute.h"
 #include "settings/settings_common.h"
 #include "support/support_helper.h"
@@ -1357,12 +1362,17 @@ public:
 	ListeningCard(
 		QWidget *parent,
 		not_null<Window::SessionController*> controller,
-		not_null<UserData*> user)
+		not_null<UserData*> user,
+		Fn<void()> activated = nullptr)
 	: AbstractButton(parent) {
 		setFocusPolicy(Qt::TabFocus);
 		setPointerCursor(true);
 		setClickedCallback([=] {
-			Mokagram::Music::Presence::OpenTrack(controller, _track);
+			if (activated) {
+				activated();
+			} else {
+				Mokagram::Music::Presence::OpenTrack(controller, _track);
+			}
 		});
 		rpl::merge(
 			style::PaletteChanged(),
@@ -1385,7 +1395,8 @@ public:
 	}
 
 	void setTrack(Mokagram::Music::Presence::Track track) {
-		const auto coverChanged = _track.soundcloudId != track.soundcloudId;
+		const auto coverChanged = _track.soundcloudId != track.soundcloudId
+			|| _track.artworkUrl != track.artworkUrl;
 		_track = std::move(track);
 		if (coverChanged) {
 			loadCover();
@@ -1400,6 +1411,16 @@ private:
 	void loadCover() {
 		using namespace Mokagram::Music;
 		_cover = QImage();
+		if (!_track.artworkUrl.isEmpty()) {
+			const auto url = _track.artworkUrl;
+			LoadImage(url, crl::guard(this, [=](QImage cover) {
+				if (_track.artworkUrl == url) {
+					_cover = std::move(cover);
+					update();
+				}
+			}));
+			return;
+		}
 		const auto id = _track.soundcloudId;
 		if (!id) {
 			return;
@@ -2401,21 +2422,59 @@ Section DetailsFiller::makeInfo() {
 
 Section DetailsFiller::makeListeningCard(not_null<UserData*> user) {
 	const auto parent = _stack->layout();
+	const auto window = _controller->parentController();
+	auto activated = Fn<void()>();
+	if (user->isSelf()) {
+		activated = [=] { Mokagram::Music::ShowPlayerBox(window); };
+	}
 	auto result = object_ptr<ListeningCard>(
 		parent,
-		_controller->parentController(),
-		user);
+		window,
+		user,
+		std::move(activated));
 	const auto card = result.data();
 	const auto shown = card->lifetime().make_state<rpl::variable<bool>>(false);
-	Mokagram::Music::Presence::Watch(
-		user,
-		parent,
-		[=](Mokagram::Music::Presence::Track track) {
-			const auto visible = bool(track);
-			card->setTrack(std::move(track));
+	if (user->isSelf()) {
+		// Своё превью: показываем то, что уйдёт в статус, без запросов к боту.
+		const auto update = [=] {
+			using namespace Mokagram::Music;
+			const auto track = CurrentQueueTrack();
+			const auto state = ::Media::Player::instance()->getState(
+				AudioMsgId::Type::Song);
+			const auto visible = !track.title.isEmpty()
+				&& state.state == ::Media::Player::State::Playing
+				&& ::Mokagram::Settings::Bool(Presence::kShareKey);
+			card->setTrack(visible
+				? Presence::Track{
+					.title = track.title,
+					.artist = track.artist,
+					.soundcloudId = track.id.toULongLong(),
+					.artworkUrl = track.artworkUrl,
+				}
+				: Presence::Track());
 			*shown = visible;
-		},
-		card->lifetime());
+		};
+		::Media::Player::instance()->updatedNotifier(
+		) | rpl::on_next([=](const ::Media::Player::TrackState &) {
+			update();
+		}, card->lifetime());
+		Mokagram::Music::QueueChanges(
+		) | rpl::on_next(update, card->lifetime());
+		Mokagram::Settings::BoolValue(
+			Mokagram::Music::Presence::kShareKey
+		) | rpl::on_next([=](bool) { update(); }, card->lifetime());
+		update();
+	} else {
+		Mokagram::Music::Presence::Watch(
+			user,
+			parent,
+			[=](Mokagram::Music::Presence::Track track) {
+				const auto visible = bool(track);
+				card->setTrack(std::move(track));
+				*shown = visible;
+			},
+			card->lifetime());
+	}
 	return {
 		.widget = std::move(result),
 		.shown = shown->value(),
@@ -3339,7 +3398,7 @@ void DetailsFiller::buildSections() {
 	Expects(!_topic || !_topic->creating());
 
 	if (const auto user = _sublist ? nullptr : _peer->asUser()) {
-		if (Mokagram::Music::Presence::CanWatch(user)) {
+		if (user->isSelf() || Mokagram::Music::Presence::CanWatch(user)) {
 			_stack->add(makeListeningCard(user));
 		}
 		_stack->add(makePersonalChannel(user));

@@ -42,6 +42,7 @@ struct Track {
 	QString title;
 	QString artist;
 	uint64 soundcloudId = 0;
+	QString artworkUrl; // только для своего профиля, наружу не передаётся
 
 	explicit operator bool() const { return !title.isEmpty(); }
 	friend bool operator==(const Track &, const Track &) = default;

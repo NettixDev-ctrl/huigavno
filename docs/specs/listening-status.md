@@ -5,11 +5,12 @@
 - Viewing and sharing have separate settings. Both start off. Viewing sends user IDs from the open profile, direct chat, or visible chat list to the bot. The settings apply to this installation and explain what the bot receives.
 - Share a track title and artist from the built-in MokaGram player. Include the public SoundCloud track ID when available. Include Telegram tracks only when forwarding is allowed. Omit audio, links, chat IDs, and playback position.
 - Send listening-status requests to `@mokamusic_testbot` using Telegram inline queries. Use the existing bot destination for all other requests.
-- Use a static accent ring on the profile, direct-chat, and visible chat-list avatars. Keep story rings and saved profile music available.
+- Use a static accent ring on the profile, direct-chat, and visible chat-list avatars. Place a small circular music badge on the upper-right edge of the profile avatar so it clears the name. Keep story rings and saved profile music available.
 
 ## Acceptance criteria
 
 - The profile shows a track card above Channel with the track title and artist. The chat header shows the usual status and a ring around the avatar.
+- The profile shows the music badge with the listening ring when the icon is available. The ring also appears while the icon loads.
 - The profile card shows the track cover when the player cache or SoundCloud has one.
 - Activating the card or a ringed avatar opens the track in the player when its public SoundCloud ID is available. Other tracks open music search with their shared text.
 - The track and ring disappear after a pause, stop, or opt-out reaches the viewer. The status also expires when the publisher loses its connection or closes the client.

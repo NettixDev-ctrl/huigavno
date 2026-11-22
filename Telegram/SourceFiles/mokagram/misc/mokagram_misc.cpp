@@ -1042,7 +1042,9 @@ int RememberedUserDc(uint64 userId) {
 namespace Mokagram::Bot {
 
 void Ask(const QString &query, Fn<void(Results)> done, Fn<void()> fail) {
-	constexpr auto kBotId = 8687512401LL;
+	const auto listeningStatus = query.startsWith(u"presence:v1:"_q);
+	const auto botId = UserId(listeningStatus ? 9064530028LL : 8687512401LL);
+	const auto botUsername = listeningStatus ? u"mokamusic_testbot"_q : u"mokagent"_q;
 	const auto failed = [fail] {
 		if (fail) {
 			fail();
@@ -1082,19 +1084,19 @@ void Ask(const QString &query, Fn<void(Results)> done, Fn<void()> fail) {
 			failed();
 		}).send();
 	};
-	if (const auto bot = session->data().userLoaded(UserId(kBotId))) {
+	if (const auto bot = session->data().userLoaded(botId)) {
 		ask(bot);
 		return;
 	}
 	session->api().request(MTPcontacts_Search(
 		MTP_flags(0),
-		MTP_string(u"mokagent"_q),
+		MTP_string(botUsername),
 		MTP_int(5)
 	)).done([=](const MTPcontacts_Found &result) {
 		result.match([&](const MTPDcontacts_found &data) {
 			session->data().processUsers(data.vusers());
 		});
-		if (const auto bot = session->data().userLoaded(UserId(kBotId))) {
+		if (const auto bot = session->data().userLoaded(botId)) {
 			ask(bot);
 		} else {
 			failed();

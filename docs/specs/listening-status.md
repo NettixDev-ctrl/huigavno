@@ -11,7 +11,7 @@
 
 - The profile shows a track card above Channel with the track title and artist. The chat header shows the usual status and a ring around the avatar.
 - The track card takes its tint from the profile background, including collectible backdrops. It uses the theme surface when the profile has no custom background.
-- The profile avatar shows the listening ring.
+- The profile avatar shows a static listening ring.
 - The regular chat list shows the ring on direct-chat avatars. Open chats and threads show the same ring on visible message avatars from eligible users. The ring follows the displayed sender and leaves avatar clicks intact.
 - A confirmed listening status appears in any visible view of that user in the same signed-in account. The status keeps its original expiry time across views.
 - The profile card shows the track cover when the player cache or SoundCloud has one.

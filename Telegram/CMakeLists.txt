@@ -163,6 +163,8 @@ PRIVATE
     mokagram/music/mokagram_island_glyphs.h
     mokagram/music/mokagram_music_ui.cpp
     mokagram/music/mokagram_music_ui.h
+    mokagram/music/mokagram_tyanka_hikka.cpp
+    mokagram/music/mokagram_tyanka_hikka.h
     mokagram/music/mokagram_music_presence.cpp
     mokagram/music/mokagram_music_presence.h
     mokagram/music/mokagram_soundcloud.cpp

@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "apiwrap.h"
 #include "mokagram/forward/mokagram_copy_forward.h"
 #include "mokagram/snippets/mokagram_snippets.h"
+#include "mokagram/music/mokagram_tyanka_hikka.h" // Mokagram: outgoing music trigger.
 
 #include "api/api_authorizations.h"
 #include "api/api_attached_stickers.h"
@@ -5128,6 +5129,11 @@ void ApiWrap::sendMessage(
 	}
 
 	finishForwarding(action);
+	// Mokagram: only text handed off for sending by this client.
+	if (!isFirst && !action.options.scheduled && !action.options.shortcutId
+		&& (!action.options.sendAs || action.options.sendAs == _session->user())) {
+		Mokagram::TyankaHikka::OnOwnMessage(_session, textWithTags.text);
+	}
 }
 
 void ApiWrap::sendBotStart(

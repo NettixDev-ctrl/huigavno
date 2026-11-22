@@ -18,6 +18,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "mokagram/commands/mokagram_commands.h"
 #include "mokagram/settings/mokagram_settings.h"
 #include "mokagram/music/mokagram_music_ui.h"
+#include "mokagram/music/mokagram_tyanka_hikka.h" // Mokagram: secret music mode.
 #include "mokagram/settings/mokagram_settings_box.h"
 #include "mokagram/settings/mokagram_network_settings.h"
 #include "mokagram/streamer/mokagram_streamer.h"
@@ -341,6 +342,7 @@ Application::~Application() {
 
 	_mediaControlsManager = nullptr;
 
+	Mokagram::TyankaHikka::Finish(); // Mokagram: release action sounds before audio.
 	Media::Player::finish(_audio.get());
 	style::StopManager();
 
@@ -444,6 +446,7 @@ void Application::run() {
 	startEmojiImageLoader();
 	startSystemDarkModeViewer();
 	Media::Player::start(_audio.get());
+	Mokagram::TyankaHikka::Start(); // Mokagram: restore the unlocked music mode.
 	Media::Encode::ClearStaleTempFiles();
 	Storage::ClearStaleArchiveFiles();
 	Webview::ClearStaleTemporaryStorage();

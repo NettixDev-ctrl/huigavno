@@ -3,6 +3,7 @@
 // of MOKAGRAM_NOTICE.md (section 7(b)): keep this notice when copying.
 // mokagram-id: 7b8dec14
 #include "mokagram/music/mokagram_music_ui.h"
+#include "mokagram/music/mokagram_tyanka_hikka.h"
 #include "mokagram/music/mokagram_music_presence.h"
 #include "mokagram/ui/mokagram_box_parts.h"
 #include "mokagram/lang/mokagram_lang.h"
@@ -4090,6 +4091,7 @@ public:
 	, _count(count)
 	, _isTrack(isTrack)
 	, _isArtist(isArtist)
+	, _tyankaAvatar(isArtist && TyankaHikka::IsArtist(_album.title))
 	, _bannerUrl(std::move(bannerUrl))
 	, _showCover(std::move(showCover))
 	, _openArtist(std::move(openArtist)) {
@@ -4218,9 +4220,35 @@ protected:
 	}
 
 	void mouseReleaseEvent(QMouseEvent *e) override {
-		if (e->button() == Qt::LeftButton && coverRect().contains(e->pos())
-			&& !_art.isNull() && _artistIdentityOpacity >= 0.5) {
-			_showCover(_art, QRect(mapToGlobal(coverRect().topLeft()), coverRect().size()));
+		const auto cover = coverRect();
+		if (e->button() != Qt::LeftButton || !cover.contains(e->pos())
+			|| _art.isNull() || _artistIdentityOpacity < 0.5) {
+			return;
+		}
+		const auto showCover = [this] {
+			const auto cover = coverRect();
+			_showCover(_art, QRect(mapToGlobal(cover.topLeft()), cover.size()));
+		};
+		if (!_tyankaAvatar) {
+			showCover();
+			return;
+		}
+		constexpr auto kAvatarClickGap = 800;
+		const auto now = crl::now();
+		if (now - _lastAvatarClick >= kAvatarClickGap) {
+			_avatarClicks = 0;
+		}
+		_lastAvatarClick = now;
+		if (++_avatarClicks == 6) {
+			_avatarClicks = 0;
+			TyankaHikka::Unlock();
+		} else if (_avatarClicks == 1) {
+			QTimer::singleShot(kAvatarClickGap, this, [=, this] {
+				if (_avatarClicks == 1 && _lastAvatarClick == now
+					&& _artistIdentityOpacity >= 0.5) {
+					showCover();
+				}
+			});
 		}
 	}
 
@@ -4416,6 +4444,9 @@ private:
 	int _count = 0;
 	bool _isTrack = false;
 	bool _isArtist = false;
+	bool _tyankaAvatar = false;
+	int _avatarClicks = 0;
+	crl::time _lastAvatarClick = 0;
 	QString _bannerUrl;
 	int _bannerTopInset = 0;
 	QImage _art;

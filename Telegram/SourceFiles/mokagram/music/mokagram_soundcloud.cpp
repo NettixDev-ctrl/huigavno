@@ -1636,11 +1636,6 @@ QString CacheDir() {
 		+ u"/mokagram_music"_q;
 }
 
-void MarkAudioCacheUsed(const QString &path) {
-	TouchCacheFile(path);
-	TrimAudioCache(path);
-}
-
 void LoadCachedAudio(
 		const QString &key,
 		const QString &cachedPath,
@@ -1657,7 +1652,10 @@ void LoadCachedAudio(
 	entry->second.push_back(std::move(done));
 	if (!started) return;
 	load([key](const QString &path, const QString &error) {
-		if (!path.isEmpty() && error.isEmpty()) MarkAudioCacheUsed(path);
+		if (!path.isEmpty() && error.isEmpty()) {
+			TouchCacheFile(path);
+			TrimAudioCache(path);
+		}
 		const auto result = loading.extract(key);
 		for (const auto &callback : result.mapped()) callback(path, error);
 	});

@@ -189,7 +189,6 @@ void SetCover(uint64 documentId, QImage image);
 
 // Папка кэша скачанных треков.
 [[nodiscard]] QString CacheDir();
-void MarkAudioCacheUsed(const QString &path);
 
 struct TrackComment {
 	QString id;

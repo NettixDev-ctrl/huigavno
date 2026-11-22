@@ -14,8 +14,9 @@ struct Track;
 [[nodiscard]] bool HasYouTubeMusicMetadata(const Track &track);
 
 // Запускается в главном потоке. Возвращает путь к аудио в кэше.
+// Скачанный файл живёт в общем LRU кэше аудио, повторные запросы объединяются.
 void DownloadYouTubeMusic(
 	const Track &track,
-	Fn<void(QString path, bool missingDownloader)> done);
+	Fn<void(const QString &path, const QString &error)> done);
 
 } // namespace Mokagram::Music

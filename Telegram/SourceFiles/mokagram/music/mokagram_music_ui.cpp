@@ -1031,10 +1031,15 @@ void PrefetchUpcoming() {
 		; left > 0 && i < int(queue.tracks.size())
 		; ++i) {
 		const auto &track = queue.tracks[i];
-		if (track.unavailable || IsTelegramTrack(track) || !track.id.toULongLong()) {
+		if (!CanPlayTrack(track) || IsTelegramTrack(track) || !track.id.toULongLong()) {
 			continue;
 		}
 		--left;
+		if (track.unavailable) {
+			// Феллбек из YouTube Music кэшируется так же, как треки SoundCloud.
+			DownloadYouTubeMusic(track, [](const QString &, const QString &) {});
+			continue;
+		}
 		ResolveThen(track, [=](Track next, QString error) {
 			if (error.isEmpty() && token == QueueState().pendingToken) {
 				Download(next, [](const QString &, const QString &) {});
@@ -1178,7 +1183,7 @@ void PlayIndex(int index, bool skipUnavailable) {
 		if (!skipUnavailable) {
 			controller->showToast(QString::fromUtf8(Lang::Tr("Загружаю: ")) + track.title);
 		}
-		DownloadYouTubeMusic(track, [=](QString path, bool missingDownloader) {
+		DownloadYouTubeMusic(track, [=](const QString &path, const QString &error) {
 			if (!valid()) return;
 			auto &queue = QueueState();
 			const auto controller = queue.controller.get();
@@ -1189,9 +1194,7 @@ void PlayIndex(int index, bool skipUnavailable) {
 					if (valid()) PlayIndex(QueueState().index + 1, true);
 				});
 			} else {
-				controller->showToast(QString::fromUtf8(Lang::Tr(missingDownloader
-					? "Для воспроизведения из YouTube Music установите yt-dlp"
-					: "Не удалось воспроизвести трек из YouTube Music")));
+				controller->showToast(error);
 			}
 		});
 		return;

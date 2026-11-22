@@ -3,6 +3,7 @@
 // of MOKAGRAM_NOTICE.md (section 7(b)): keep this notice when copying.
 #include "mokagram/music/mokagram_youtube_music.h"
 
+#include "mokagram/lang/mokagram_lang.h"
 #include "mokagram/music/mokagram_soundcloud.h"
 
 #include <QtCore/QCoreApplication>
@@ -22,8 +23,6 @@
 #include <QtNetwork/QNetworkAccessManager>
 #include <QtNetwork/QNetworkReply>
 
-#include <map>
-
 namespace Mokagram::Music {
 namespace {
 
@@ -32,8 +31,6 @@ constexpr auto kSongFilter = "Eg-KAQwIARAAGAAgACgAMABqChAEEAMQCRAFEAo%3D";
 constexpr auto kResponseLimit = 4 * 1024 * 1024;
 constexpr auto kAudioLimit = 100 * 1024 * 1024;
 constexpr auto kAudioExtensions = { "m4a", "webm" };
-
-using DownloadDone = Fn<void(QString, bool)>;
 
 struct CatalogConfig {
 	QString key;
@@ -248,11 +245,15 @@ void SearchSong(const Track &track, Fn<void(QString)> done) {
 	return {};
 }
 
-void DownloadSong(const QString &tool, const QString &id, const QString &cachePrefix, DownloadDone done) {
+[[nodiscard]] QString DownloadError() {
+	return QString::fromUtf8(Lang::Tr("Не удалось воспроизвести трек из YouTube Music"));
+}
+
+void DownloadSong(const QString &tool, const QString &id, const QString &cachePrefix, AudioFileDone done) {
 	QDir().mkpath(CacheDir());
 	const auto temp = std::make_shared<QTemporaryDir>(CacheDir() + u"/yt-XXXXXX"_q);
 	if (!temp->isValid()) {
-		done({}, false);
+		done({}, DownloadError());
 		return;
 	}
 	const auto process = new QProcess(QCoreApplication::instance());
@@ -261,7 +262,7 @@ void DownloadSong(const QString &tool, const QString &id, const QString &cachePr
 	QObject::connect(process, &QProcess::errorOccurred, process, [=](QProcess::ProcessError error) {
 		if (error == QProcess::FailedToStart) {
 			process->deleteLater();
-			done({}, false);
+			done({}, DownloadError());
 		}
 	});
 	QObject::connect(process, &QProcess::finished, process, [=](int code, QProcess::ExitStatus status) {
@@ -270,11 +271,20 @@ void DownloadSong(const QString &tool, const QString &id, const QString &cachePr
 			? CachedAudio(temp->filePath(u"audio."_q))
 			: QString();
 		if (file.isEmpty()) {
-			done({}, false);
+			done({}, DownloadError());
+			return;
+		}
+		if (const auto cached = CachedAudio(cachePrefix); !cached.isEmpty()) {
+			done(cached, {});
 			return;
 		}
 		const auto path = cachePrefix + QFileInfo(file).suffix();
-		done(QFile::rename(file, path) ? path : CachedAudio(cachePrefix), false);
+		const auto existing = QFileInfo(path);
+		if (existing.isFile() && (existing.size() == 0 || existing.size() > kAudioLimit)) {
+			QFile::remove(path);
+		}
+		const auto saved = QFile::rename(file, path) ? path : CachedAudio(cachePrefix);
+		done(saved, saved.isEmpty() ? DownloadError() : QString());
 	});
 	QTimer::singleShot(60000, process, [=] { process->kill(); });
 	auto args = QStringList{
@@ -298,39 +308,27 @@ bool HasYouTubeMusicMetadata(const Track &track) {
 	return track.id.toULongLong() && !MatchText(track.title).isEmpty() && !MatchText(track.artist).isEmpty();
 }
 
-void DownloadYouTubeMusic(const Track &track, DownloadDone done) {
+void DownloadYouTubeMusic(const Track &track, AudioFileDone done) {
 	if (!HasYouTubeMusicMetadata(track)) {
-		done({}, false);
+		done({}, DownloadError());
 		return;
 	}
 	const auto id = QString::number(track.id.toULongLong());
 	const auto prefix = CacheDir() + u"/yt-"_q + id + u'.';
-	if (const auto cached = CachedAudio(prefix); !cached.isEmpty()) {
-		MarkAudioCacheUsed(cached);
-		done(cached, false);
-		return;
-	}
-	const auto tool = FindTool(u"yt-dlp"_q);
-	if (tool.isEmpty()) {
-		done({}, true);
-		return;
-	}
-	static auto loading = std::map<QString, std::vector<DownloadDone>>();
-	const auto [entry, started] = loading.try_emplace(id);
-	entry->second.push_back(std::move(done));
-	if (!started) return;
-	const auto finish = [=](QString path, bool missingDownloader) {
-		if (!path.isEmpty()) MarkAudioCacheUsed(path);
-		const auto result = loading.extract(id);
-		for (const auto &callback : result.mapped()) callback(path, missingDownloader);
-	};
-	SearchSong(track, [=](QString videoId) {
-		if (videoId.isEmpty()) {
-			finish({}, false);
+	LoadCachedAudio(prefix, CachedAudio(prefix), [=](AudioFileDone finish) {
+		const auto tool = FindTool(u"yt-dlp"_q);
+		if (tool.isEmpty()) {
+			finish({}, QString::fromUtf8(Lang::Tr("Для воспроизведения из YouTube Music установите yt-dlp")));
 			return;
 		}
-		DownloadSong(tool, videoId, prefix, finish);
-	});
+		SearchSong(track, [=](QString videoId) {
+			if (videoId.isEmpty()) {
+				finish({}, DownloadError());
+				return;
+			}
+			DownloadSong(tool, videoId, prefix, finish);
+		});
+	}, std::move(done));
 }
 
 } // namespace Mokagram::Music

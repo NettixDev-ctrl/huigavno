@@ -485,6 +485,11 @@ struct TrackStream {
 		result.transcodingUrl = streams.front().url;
 		result.extension = streams.front().extension;
 		result.hls = streams.front().hls;
+	} else if (const auto full = object.value("full_duration").toInt(); full > 0) {
+		// SoundCloud отдаёт длительность превью в duration для закрытых треков.
+		result.durationMs = full;
+	} else if (object.value("policy").toString() == u"SNIP"_q) {
+		result.durationMs = 0;
 	}
 	return result;
 }

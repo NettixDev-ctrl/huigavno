@@ -696,14 +696,6 @@ InnerWidget::InnerWidget(
 		},
 		[=](Mokagram::Music::Presence::Tracks tracks) {
 			_listeningTracks = std::move(tracks);
-			if (!_listeningTracks.empty() && !_listeningRingTimer) {
-				_listeningRingTimer = std::make_unique<base::Timer>([=] {
-					update(0, _visibleTop, width(), _visibleBottom - _visibleTop);
-				});
-				_listeningRingTimer->callEach(30);
-			} else if (_listeningTracks.empty() && _listeningRingTimer) {
-				_listeningRingTimer.reset();
-			}
 			update(0, _visibleTop, width(), _visibleBottom - _visibleTop);
 		},
 		lifetime());
@@ -1258,8 +1250,7 @@ void InnerWidget::paintEvent(QPaintEvent *e) {
 				&& Mokagram::Music::Presence::CanWatch(user)) {
 				const auto &st = *context.st;
 				Mokagram::Music::Presence::PaintRing(p, myrtlrect(
-					st.padding.left(), st.padding.top(), st.photoSize, st.photoSize),
-					crl::now());
+					st.padding.left(), st.padding.top(), st.photoSize, st.photoSize));
 			}
 		};
 

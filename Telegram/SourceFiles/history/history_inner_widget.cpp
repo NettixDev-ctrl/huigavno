@@ -1807,7 +1807,10 @@ void HistoryInner::paintEvent(QPaintEvent *e) {
 					&& _listeningTracks.contains(peerToUser(user->id).bare)
 					&& Mokagram::Music::Presence::CanWatch(user)) {
 					Mokagram::Music::Presence::PaintRing(p, myrtlrect(
-						st::historyPhotoLeft, userpicTop, st::msgPhotoSize, st::msgPhotoSize), crl::now());
+						st::historyPhotoLeft,
+						userpicTop,
+						st::msgPhotoSize,
+						st::msgPhotoSize));
 				}
 			} else if (const auto info = item->displayHiddenSenderInfo()) {
 				if (info->customUserpic.empty()) {

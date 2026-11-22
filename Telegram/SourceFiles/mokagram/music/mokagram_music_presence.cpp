@@ -15,8 +15,6 @@
 
 #include <QtCore/QStringList>
 
-#include <cmath>
-
 namespace Mokagram::Music::Presence {
 namespace {
 
@@ -380,7 +378,7 @@ void WatchList(
 	}, lifetime);
 }
 
-void PaintRing(QPainter &p, const QRect &avatar, crl::time now) {
+void PaintRing(QPainter &p, const QRect &avatar) {
 	p.save();
 	auto hq = PainterHighQualityEnabler(p);
 	const auto rect = QRectF(avatar);
@@ -388,17 +386,9 @@ void PaintRing(QPainter &p, const QRect &avatar, crl::time now) {
 	const auto inset = line / 2.;
 	const auto path = rect.adjusted(inset, inset, -inset, -inset);
 
-	// MD3 indeterminate: дуга вращается и дышит длиной, как загрузка Google.
-	constexpr auto kCycle = crl::time(1800);
-	const auto phase = (now % kCycle) / double(kCycle);
-	const auto sweep = 40. + 260. * (0.5 - 0.5 * std::cos(phase * M_PI * 2));
-	const auto start = -90. + phase * 360.;
-
-	auto arc = QPen(st::windowBgActive->c, line);
-	arc.setCapStyle(Qt::RoundCap);
-	p.setPen(arc);
+	p.setPen(QPen(st::windowBgActive->c, line));
 	p.setBrush(Qt::NoBrush);
-	p.drawArc(path, int(-start * 16), int(sweep * 16));
+	p.drawEllipse(path);
 	p.restore();
 }
 

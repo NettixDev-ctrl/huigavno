@@ -5,7 +5,7 @@
 - Viewing and sharing have separate settings. Both start off. Viewing sends user IDs from the open profile, direct-chat header, visible chat rows, and visible message avatars to the bot. The settings apply to this installation and explain what the bot receives.
 - Share a track title and artist from the built-in MokaGram player. Include the public SoundCloud track ID when available. Include Telegram tracks only when forwarding is allowed. Omit audio, links, chat IDs, and playback position.
 - Send listening-status requests to `@mokagent` using Telegram inline queries. Use the existing bot destination for all other requests.
-- Use an accent ring on the profile, direct-chat, and visible chat-list avatars. Keep story rings and saved profile music available.
+- Use a static accent ring on avatars in profiles, direct-chat headers, chat lists, and visible messages. Keep story rings and saved profile music available.
 
 ## Acceptance criteria
 

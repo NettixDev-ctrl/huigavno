@@ -3006,14 +3006,7 @@ void TopBar::paintEvent(QPaintEvent *e) {
 		const auto listening = _listeningTrack && _progress.current() > 0.85;
 		// Mokagram: the listening ring fits inside the story outline.
 		if (listening) {
-			p.save();
-			auto hq = PainterHighQualityEnabler(p);
-			const auto line = style::ConvertFloatScale(2.);
-			const auto inset = line / 2.;
-			p.setPen(QPen(st::windowBgActive->c, line));
-			p.setBrush(Qt::NoBrush);
-			p.drawEllipse(QRectF(geometry).adjusted(inset, inset, -inset, -inset));
-			p.restore();
+			Mokagram::Music::Presence::PaintRing(p, geometry);
 		}
 		paintStoryOutline(p, geometry);
 	}

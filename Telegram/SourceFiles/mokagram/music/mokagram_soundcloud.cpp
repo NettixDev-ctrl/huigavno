@@ -612,7 +612,7 @@ void TouchCacheFile(const QString &path) {
 void TrimAudioCache(const QString &protectPath) {
 	const auto dir = QDir(CacheDir());
 	const auto files = dir.entryInfoList(
-		{ u"*.m4a"_q, u"*.mp3"_q }, QDir::Files, QDir::Time);
+		{ u"*.m4a"_q, u"*.mp3"_q, u"yt-*.webm"_q }, QDir::Files, QDir::Time);
 	auto total = qint64(0);
 	auto count = 0;
 	for (const auto &file : files) {
@@ -1629,6 +1629,11 @@ void LoadAlbumBackdrop(const Album &album, Fn<void(QString)> done) {
 QString CacheDir() {
 	return QStandardPaths::writableLocation(QStandardPaths::CacheLocation)
 		+ u"/mokagram_music"_q;
+}
+
+void MarkAudioCacheUsed(const QString &path) {
+	TouchCacheFile(path);
+	TrimAudioCache(path);
 }
 
 void Search(

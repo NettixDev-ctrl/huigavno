@@ -1,0 +1,53 @@
+__id__ = "punto"
+__name__ = "Punto"
+__description__ = "Convert a replied message between English and Russian keyboard layouts."
+__author__ = "mokagram"
+__version__ = "1.0"
+__permissions__ = ["messages.read", "ui"]
+
+from base_plugin import BasePlugin, command
+from mokagram_sdk import api
+
+
+_ENGLISH_KEYS = (
+    "`qwertyuiop[]asdfghjkl;'zxcvbnm,./"
+    '~QWERTYUIOP{}ASDFGHJKL:"ZXCVBNM<>?'
+    "@#$^&|"
+)
+_RUSSIAN_KEYS = (
+    "ёйцукенгшщзхъфывапролджэячсмитьбю."
+    'ЁЙЦУКЕНГШЩЗХЪФЫВАПРОЛДЖЭЯЧСМИТЬБЮ,'
+    '"№;:?/'
+)
+_ENGLISH_LETTERS = frozenset(key for key in _ENGLISH_KEYS if key.isalpha())
+_RUSSIAN_LETTERS = frozenset(key for key in _RUSSIAN_KEYS if key.isalpha())
+_TO_RUSSIAN = str.maketrans(_ENGLISH_KEYS, _RUSSIAN_KEYS)
+_TO_ENGLISH = str.maketrans(_RUSSIAN_KEYS, _ENGLISH_KEYS)
+
+
+class Punto(BasePlugin):
+    @command("punto", "Reply with the text converted between English and Russian keyboard layouts.")
+    def punto(self, ctx):
+        if not ctx.reply_to or ctx.args:
+            api.show_toast(f"Send {ctx.prefix}punto as a reply to a message.")
+            return
+
+        message = ctx.reply_message
+        if message is None:
+            api.show_toast("The replied message is unavailable.")
+            return
+
+        text = message.get("text")
+        if not isinstance(text, str) or not text.strip():
+            api.show_toast("The replied message has no text.")
+            return
+
+        english = sum(char in _ENGLISH_LETTERS for char in text)
+        russian = sum(char in _RUSSIAN_LETTERS for char in text)
+        if english == russian:
+            api.show_toast("Cannot determine the keyboard layout.")
+            return
+
+        # Each key maps to one UTF-16 code unit, so entity offsets stay valid.
+        table = _TO_RUSSIAN if english > russian else _TO_ENGLISH
+        return text.translate(table), message.get("entities", [])

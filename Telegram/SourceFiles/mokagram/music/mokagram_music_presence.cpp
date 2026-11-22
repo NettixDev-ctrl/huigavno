@@ -25,6 +25,7 @@ constexpr auto kReadInterval = crl::time(10000);
 constexpr auto kLabelBytes = 150;
 constexpr auto kBatchSize = 12;
 const auto kResultPrefix = u"presence-v1:"_q;
+const auto kWriteAck = u"presence-v1"_q;
 
 [[nodiscard]] QByteArray Encode(const Playback &track) {
 	auto label = track.title.simplified();
@@ -122,13 +123,16 @@ void Refresh(const std::shared_ptr<Publisher> &state) {
 	s.last = clear ? QByteArray() : label;
 	s.refreshAt = now + kRefresh;
 	const auto request = ++s.request;
-	const auto complete = [weak = std::weak_ptr(state), request, clear] {
+	const auto complete = [weak = std::weak_ptr(state), request, clear](
+			bool acknowledged) {
 		if (const auto state = weak.lock(); state && state->request == request) {
 			state->pending = false;
 			if (clear) {
 				state->shared = false;
 			} else if (!Settings::Bool(kShareKey)) {
 				Refresh(state);
+			} else if (!acknowledged) {
+				state->refreshAt = crl::now() + kPublishCheck;
 			}
 		}
 	};
@@ -137,8 +141,10 @@ void Refresh(const std::shared_ptr<Publisher> &state) {
 		clear
 			? u"presence:v1:clear:"_q + s.writer
 			: u"presence:v1:put:"_q + s.writer + u':' + QString::fromLatin1(label),
-		[=](Bot::Results) { complete(); },
-		complete);
+		[=](Bot::Results results) {
+			complete(results.size() == 1 && results.front().id == kWriteAck);
+		},
+		[=] { complete(false); });
 }
 
 struct Viewer {
@@ -279,9 +285,6 @@ void WatchList(
 						return;
 					}
 					--state->pending;
-					for (const auto id : batch) {
-						state->active.erase(id);
-					}
 					const auto now = crl::now();
 					for (const auto &result : results) {
 						if (!result.id.startsWith(kResultPrefix)) {
@@ -292,9 +295,12 @@ void WatchList(
 						if (!std::binary_search(batch.begin(), batch.end(), id)) {
 							continue;
 						}
-						auto activity = Decode(result, sentAt, now);
-						if (activity.track) {
-							state->active.emplace(id, std::move(activity));
+						// An empty batch can also mean the bot could not answer.
+						if (result.description == u"0"_q) {
+							state->active.erase(id);
+						} else if (auto activity = Decode(result, sentAt, now);
+								activity.track) {
+							state->active.insert_or_assign(id, std::move(activity));
 						}
 					}
 					Notify(*state);

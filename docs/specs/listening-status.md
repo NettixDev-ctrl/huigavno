@@ -14,6 +14,7 @@
 - Activating the card or a ringed avatar opens the track in the player when its public SoundCloud ID is available. Other tracks open music search with their shared text.
 - The track and ring disappear after a pause, stop, or opt-out reaches the viewer. The status also expires when the publisher loses its connection or closes the client.
 - Switching chats never shows a previous user's track. Bot errors and invalid responses leave the normal profile and chat status usable.
+- A reply that does not confirm a track or its absence leaves the last confirmed status in place until its lease expires. An unacknowledged publish can refresh sooner than the normal publish interval.
 
 ## Bot contract
 
@@ -21,6 +22,6 @@
 - `presence:v1:clear:<writer>` removes the authenticated sender's lease when its writer matches. A clear from an earlier client must leave a newer client's lease in place.
 - `presence:v1:get:<user_id>` returns a lease for a positive Telegram user ID. Return no result when the lease is absent or expired.
 - `presence:v1:put:<writer>:<soundcloud_id>:<base64url>` adds a validated public SoundCloud ID to the same lease.
-- `presence:v1:list:<user_id>,...` gets up to 12 visible peers in one request. Return one article per active lease with ID `presence-v1:<user_id>`. Its description contains the remaining milliseconds, followed by a colon and the public track ID when present.
+- `presence:v1:list:<user_id>,...` gets up to 12 visible peers in one request. A successful reply has one article per requested user with ID `presence-v1:<user_id>`. Its description contains the remaining milliseconds, followed by a colon and the public track ID when present. Use description `0` to confirm that the user has no active lease.
 - Return one article with ID `presence-v1`. For a read, put the label in `title` and the remaining lease in milliseconds in `description`. A successful write or clear only needs the ID.
 - Set `cache_time` to `0` and `is_personal` to `true`. Rate limit by sender. Derive the publisher identity from the inline query sender. Keep only the current lease and remove expired records. Never log the track label.

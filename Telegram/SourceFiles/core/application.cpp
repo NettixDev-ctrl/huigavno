@@ -158,21 +158,21 @@ void Start();
 namespace Core {
 namespace {
 
-// Mokagram: Windows builds carry the UI font next to Telegram.exe, so the
-// interface is identical on systems where Adwaita Sans is not installed.
+// Mokagram: Windows builds carry a soft UI font with Cyrillic glyphs next to
+// Telegram.exe, so the interface is identical on systems where it is absent.
 [[nodiscard]] bool LoadMokagramUiFont() {
 	const auto directory = QDir(
 		QCoreApplication::applicationDirPath() + u"/fonts"_q);
 	if (!directory.exists()) {
 		return false;
 	}
-	const auto regular = directory.filePath(u"AdwaitaSans-Regular.ttf"_q);
-	const auto italic = directory.filePath(u"AdwaitaSans-Italic.ttf"_q);
+	const auto regular = directory.filePath(u"Nunito-Regular.ttf"_q);
+	const auto italic = directory.filePath(u"Nunito-Italic.ttf"_q);
 	const auto regularId = QFontDatabase::addApplicationFont(regular);
 	const auto italicId = QFontDatabase::addApplicationFont(italic);
 	return (regularId >= 0) && (italicId >= 0)
 		&& QFontDatabase::applicationFontFamilies(regularId).contains(
-			u"Adwaita Sans"_q);
+			u"Nunito"_q);
 }
 
 constexpr auto kQuitPreventTimeoutMs = crl::time(1500);
@@ -428,11 +428,11 @@ void Application::run() {
 			crl::now() - started));
 	});
 
-	// Mokagram: use the packaged Adwaita Sans for every UI context. Qt selects
+	// Mokagram: use the packaged Nunito for every UI context. Qt selects
 	// the regular, italic and synthesized demi-bold variants from this family.
 	style::SetCustomFont(
 		LoadMokagramUiFont()
-			? u"Adwaita Sans"_q
+			? u"Nunito"_q
 			: settings().customFontFamily());
 	style::internal::StartFonts();
 	perfStage("fonts");

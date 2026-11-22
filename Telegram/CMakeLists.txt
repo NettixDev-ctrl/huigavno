@@ -2962,6 +2962,29 @@ if (WIN32)
     get_filename_component(mokagram_python_dll "${Python3_RUNTIME_LIBRARY_RELEASE}" NAME)
     target_link_options(Telegram PRIVATE /DELAYLOAD:${mokagram_python_dll})
 
+    # Mokagram: keep the bundled UI font beside the executable. The app loads
+    # it before style fonts are initialized, so no system font installation is
+    # required for a consistent Windows UI.
+    add_custom_command(TARGET Telegram POST_BUILD
+    COMMAND
+        ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:Telegram>/fonts
+    COMMAND
+        ${CMAKE_COMMAND} -E copy_if_different
+            ${res_loc}/fonts/mokagram/AdwaitaSans-Regular.ttf
+            $<TARGET_FILE_DIR:Telegram>/fonts/AdwaitaSans-Regular.ttf
+    COMMAND
+        ${CMAKE_COMMAND} -E copy_if_different
+            ${res_loc}/fonts/mokagram/AdwaitaSans-Italic.ttf
+            $<TARGET_FILE_DIR:Telegram>/fonts/AdwaitaSans-Italic.ttf
+    COMMAND
+        ${CMAKE_COMMAND} -E copy_if_different
+            ${res_loc}/fonts/mokagram/LICENSE-Adwaita-Sans.txt
+            $<TARGET_FILE_DIR:Telegram>/fonts/LICENSE-Adwaita-Sans.txt
+    COMMENT
+        "Copying bundled Adwaita Sans fonts."
+    VERBATIM
+    )
+
     if (DESKTOP_APP_WIN7_BASELINE)
         # The loader reads the subsystem version as the minimal Windows.
         target_link_options(Telegram PRIVATE /SUBSYSTEM:WINDOWS,6.01)

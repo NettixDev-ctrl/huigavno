@@ -131,12 +131,15 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "boxes/premium_limits_box.h"
 #include "ui/accessible/ui_accessible_factory.h"
 #include "ui/boxes/confirm_box.h"
+#include "ui/style/style_core_font.h"
 #include "core/cached_webview_availability.h"
 #include "test/test_agent.h"
 
 #include <QtCore/QStandardPaths>
 #include <QtCore/QMimeDatabase>
+#include <QtCore/QDir>
 #include <QtGui/QGuiApplication>
+#include <QtGui/QFontDatabase>
 #include <QtGui/QScreen>
 
 #include <ksandbox.h>
@@ -154,6 +157,23 @@ void Start();
 
 namespace Core {
 namespace {
+
+// Mokagram: Windows builds carry the UI font next to Telegram.exe, so the
+// interface is identical on systems where Adwaita Sans is not installed.
+[[nodiscard]] bool LoadMokagramUiFont() {
+	const auto directory = QDir(
+		QCoreApplication::applicationDirPath() + u"/fonts"_q);
+	if (!directory.exists()) {
+		return false;
+	}
+	const auto regular = directory.filePath(u"AdwaitaSans-Regular.ttf"_q);
+	const auto italic = directory.filePath(u"AdwaitaSans-Italic.ttf"_q);
+	const auto regularId = QFontDatabase::addApplicationFont(regular);
+	const auto italicId = QFontDatabase::addApplicationFont(italic);
+	return (regularId >= 0) && (italicId >= 0)
+		&& QFontDatabase::applicationFontFamilies(regularId).contains(
+			u"Adwaita Sans"_q);
+}
 
 constexpr auto kQuitPreventTimeoutMs = crl::time(1500);
 constexpr auto kAutoLockTimeoutLateMs = crl::time(3000);
@@ -408,7 +428,12 @@ void Application::run() {
 			crl::now() - started));
 	});
 
-	style::SetCustomFont(settings().customFontFamily());
+	// Mokagram: use the packaged Adwaita Sans for every UI context. Qt selects
+	// the regular, italic and synthesized demi-bold variants from this family.
+	style::SetCustomFont(
+		LoadMokagramUiFont()
+			? u"Adwaita Sans"_q
+			: settings().customFontFamily());
 	style::internal::StartFonts();
 	perfStage("fonts");
 

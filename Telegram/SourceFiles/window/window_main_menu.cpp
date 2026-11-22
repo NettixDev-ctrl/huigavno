@@ -2318,27 +2318,15 @@ void MainMenu::paintEvent(QPaintEvent *e) {
 	const auto clip = e->rect();
 	const auto cover = QRect(0, 0, width(), coverHeight());
 
-	// Mokagram: углы меню у внутреннего края скруглены, как у профиля.
-	constexpr auto kRadius = 32;
-	const auto shape = (Mokagram::Settings::Int(u"look.menu_side"_q) == 1)
-		? QRectF(0, 0, width() + kRadius, height())
-		: QRectF(-kRadius, 0, width() + kRadius, height());
+	// Mokagram: menu is a single rounded surface instead of a sheet with a
+	// squared outer edge. Children remain in the existing layer, preserving
+	// the opening direction and keyboard/focus behaviour.
+	const auto radius = style::ConvertScale(28);
+	const auto shape = QRectF(rect());
 	auto hq = PainterHighQualityEnabler(p);
 	p.setPen(Qt::NoPen);
-	{
-		// Углы закрашены тем, что под меню, с тем же затемнением слоя.
-		auto corners = QPainterPath();
-		corners.addRect(QRectF(0, 0, width(), height()));
-		auto body = QPainterPath();
-		body.addRoundedRect(shape, kRadius, kRadius);
-		corners = corners.subtracted(body);
-		p.setBrush(property("moka-pinned").toBool()
-			? st::windowBg
-			: st::layerBg);
-		p.drawPath(corners);
-	}
 	p.setBrush(st::mainMenuBg);
-	p.drawRoundedRect(shape, kRadius, kRadius);
+	p.drawRoundedRect(shape, radius, radius);
 	if (cover.intersects(clip)) {
 		drawName(p);
 	}

@@ -53,6 +53,10 @@ public:
 
 	void parentResized() override;
 	void showFinished() override;
+	[[nodiscard]] crl::time animationDuration() const override {
+		// Mokagram: keep the familiar left-to-right reveal, with less abrupt stop.
+		return 260;
+	}
 
 	// Mokagram: те же пункты горизонтальной панелью (закрепление сверху или снизу).
 	// side: 2 сверху, 3 снизу.

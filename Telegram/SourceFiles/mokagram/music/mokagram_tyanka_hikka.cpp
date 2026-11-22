@@ -3,6 +3,7 @@
 // of MOKAGRAM_NOTICE.md (section 7(b)): keep this notice when copying.
 #include "mokagram/music/mokagram_tyanka_hikka.h"
 
+#include "base/random.h"
 #include "base/unixtime.h"
 #include "core/application.h"
 #include "core/core_settings.h"
@@ -36,13 +37,25 @@ namespace {
 constexpr auto kSong = AudioMsgId::Type::Song;
 constexpr auto kDocumentId = DocumentId(0x4D4F4D0000000001ULL);
 
-struct WordTiming {
+struct ClipTiming {
 	crl::time start;
 	crl::time end;
 };
 
-constexpr auto kWords = std::to_array<WordTiming>({
-#include "mokagram/music/mokagram_tyanka_hikka_words.inc"
+// Phrase boundaries in milliseconds, aligned to the original recording.
+constexpr auto kClips = std::to_array<ClipTiming>({
+	{ 15140, 17700 },
+	{ 21560, 23380 },
+	{ 23580, 25480 },
+	{ 27580, 29460 },
+	{ 30620, 31380 },
+	{ 39420, 41320 },
+	{ 43320, 45140 },
+	{ 48400, 49560 },
+	{ 50960, 51500 },
+	{ 52420, 53640 },
+	{ 55120, 55480 },
+	{ 91240, 93080 },
 });
 
 [[nodiscard]] QString SettingKey() {
@@ -132,7 +145,7 @@ public:
 			}
 		}
 
-		_word.reset();
+		_clip.reset();
 		const auto document = session->data().document(
 			kDocumentId,
 			0,
@@ -169,7 +182,7 @@ protected:
 			|| type == QEvent::Wheel
 			|| (type == QEvent::KeyPress
 				&& !static_cast<QKeyEvent*>(event)->isAutoRepeat())) {
-			playWord();
+			playClip();
 		}
 		return false;
 	}
@@ -183,21 +196,21 @@ private:
 		const auto app = QCoreApplication::instance();
 		if (enabled) {
 			_path = TrackPath();
-			_nextWord = 0;
+			_lastClip = -1;
 			app->installEventFilter(this);
 		} else {
 			app->removeEventFilter(this);
-			_word.reset();
+			_clip.reset();
 			if (IsCurrentSong()) {
 				Media::Player::instance()->stop(kSong);
 			}
 		}
 	}
 
-	void playWord() {
+	void playClip() {
 		if (_path.isEmpty()
 			|| !Core::App().settings().notificationsVolume()
-			|| (_word && _word->isActive())) {
+			|| (_clip && _clip->isActive())) {
 			return;
 		}
 		if (IsCurrentSong()) {
@@ -207,18 +220,22 @@ private:
 				return;
 			}
 		}
-		const auto word = kWords[_nextWord];
-		_nextWord = (_nextWord + 1) % kWords.size();
-		_word = Media::Audio::Current().createTrack();
-		_word->fillFromFile(_path, word.start, word.end - word.start);
-		_word->playOnce();
+		auto index = base::RandomIndex(int(kClips.size()) - (_lastClip >= 0 ? 1 : 0));
+		if (_lastClip >= 0 && index >= _lastClip) {
+			++index;
+		}
+		_lastClip = index;
+		const auto clip = kClips[index];
+		_clip = Media::Audio::Current().createTrack();
+		_clip->fillFromFile(_path, clip.start, clip.end - clip.start);
+		_clip->playOnce();
 	}
 
 	bool _unlocked = false;
 	bool _enabled = false;
 	QString _path;
-	size_t _nextWord = 0;
-	std::unique_ptr<Media::Audio::Track> _word;
+	int _lastClip = -1;
+	std::unique_ptr<Media::Audio::Track> _clip;
 	rpl::lifetime _lifetime;
 };
 

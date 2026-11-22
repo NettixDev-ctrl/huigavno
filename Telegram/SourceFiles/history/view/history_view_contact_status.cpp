@@ -623,15 +623,9 @@ int ContactStatus::Bar::resizeGetHeight(int newWidth) {
 		// Mokagram: the destructive action reads as one contained pill instead
 		// of a hard edge-to-edge strip. The close control stays in the same
 		// visual group and keeps its existing behaviour.
-		const auto inset = style::ConvertScale(10);
-		const auto top = style::ConvertScale(4);
-		const auto pill = QRect(
-			inset,
-			top,
-			newWidth - 2 * inset,
-			closeHeight - 2 * top);
+		const auto pill = QRect(0, 0, newWidth, closeHeight);
 		_report->setGeometry(pill);
-		_close->moveToRight(inset, top, newWidth - 2 * inset);
+		_close->moveToRight(0, 0, newWidth);
 		auto path = QPainterPath();
 		path.addRoundedRect(
 			QRectF(_report->rect()),
@@ -639,7 +633,7 @@ int ContactStatus::Bar::resizeGetHeight(int newWidth) {
 			pill.height() / 2);
 		_report->setMask(QRegion(path.toFillPolygon().toPolygon()));
 		_close->raise();
-		return closeHeight + 2 * top;
+		return closeHeight;
 	} else if (!leftButton->isHidden() && !rightButton->isHidden()) {
 		const auto leftWidth = buttonWidth(leftButton);
 		const auto rightWidth = buttonWidth(rightButton);

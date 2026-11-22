@@ -8,10 +8,12 @@
 #include "main/main_session.h"
 #include "mokagram/misc/mokagram_misc.h"
 #include "mokagram/settings/mokagram_settings.h"
+#include "ui/effects/send_action_animations.h"
 #include "ui/painter.h"
 #include "ui/rp_widget.h"
 
 #include "styles/palette.h"
+#include "styles/style_dialogs.h"
 
 #include <QtCore/QStringList>
 
@@ -386,6 +388,14 @@ void PaintRing(QPainter &p, const QRect &avatar) {
 	p.setPen(QPen(st::windowBgActive->c, line));
 	p.setBrush(Qt::NoBrush);
 	p.drawEllipse(QRectF(avatar).adjusted(inset, inset, -inset, -inset));
+
+	// Use the same three bars and size as the group call badge.
+	const auto size = st::dialogsCallBadgeSize;
+	p.translate(avatar.right() + 1 - size, avatar.bottom() + 1 - size);
+	p.setPen(Qt::NoPen);
+	p.setBrush(st::windowBgActive);
+	p.drawEllipse(QRectF(0, 0, size, size));
+	Ui::SendActionAnimation::PaintSpeakingIdle(p, st::windowBg, 0, 0, size);
 	p.restore();
 }
 

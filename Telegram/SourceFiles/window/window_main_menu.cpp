@@ -6,6 +6,7 @@ For license and copyright information please follow this link:
 https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "window/window_main_menu.h"
+#include <QtWidgets/QGraphicsOpacityEffect>
 #include "mokagram/stories/mokagram_story_post.h"
 #include "mokagram/lang/mokagram_lang.h"
 #include "mokagram/settings/mokagram_settings.h"
@@ -633,13 +634,15 @@ private:
 // Окно по ПКМ на панели: сторона закрепления, показ и порядок значков.
 void ShowBarBox(
 		not_null<SessionController*> controller,
-		std::vector<BarItem> items) {
+		std::vector<BarItem> items,
+		QString hiddenKey = u"look.bar_hidden"_q,
+		QString orderKey = u"look.bar_order"_q,
+		QString titleText = QString::fromUtf8(Mokagram::Lang::Tr("Панель"))) {
 	controller->show(Box([=](not_null<Ui::GenericBox*> box) {
 		namespace BP = Mokagram::BoxParts;
 		BP::RoundLayer(box);
 		box->setStyle(BP::PillButtonsBox());
-		box->setTitle(rpl::single(QString::fromUtf8(
-			Mokagram::Lang::Tr("Панель"))));
+		box->setTitle(rpl::single(titleText));
 		const auto content = box->verticalLayout();
 		const auto outer = BP::kOuterSide;
 
@@ -700,11 +703,11 @@ void ShowBarBox(
 					hidden.push_back(row->id());
 				}
 			}
-			SaveBarList(u"look.bar_order"_q, order);
-			SaveBarList(u"look.bar_hidden"_q, hidden);
+			SaveBarList(orderKey, order);
+			SaveBarList(hiddenKey, hidden);
 		};
-		const auto hidden = BarList(u"look.bar_hidden"_q);
-		const auto order = BarList(u"look.bar_order"_q);
+		const auto hidden = BarList(hiddenKey);
+		const auto order = BarList(orderKey);
 		const auto position = [&](const BarItem &item) {
 			const auto index = order.indexOf(item.id);
 			return (index < 0) ? int(order.size()) : index;
@@ -747,8 +750,8 @@ void ShowBarBox(
 		box->addLeftButton(
 			rpl::single(QString::fromUtf8(Mokagram::Lang::Tr("Сбросить"))),
 			[=] {
-				SaveBarList(u"look.bar_order"_q, QStringList());
-				SaveBarList(u"look.bar_hidden"_q, QStringList());
+				SaveBarList(orderKey, QStringList());
+				SaveBarList(hiddenKey, QStringList());
 				box->closeBox();
 			});
 	}));
@@ -1322,16 +1325,11 @@ MainMenu::MainMenu(
 	setupUserpicButton();
 	setupAccountsToggle();
 	setupSetEmojiStatus();
-	// Mokagram: бургер раскрывает кнопки по бокам аватарки.
+	// Mokagram: бургер в правом верхнем углу раскрывает пилюлю влево.
 	const auto dockMargin = style::ConvertScale(10);
-	const auto dockSize = style::ConvertScale(36);
-	const auto dockStep = dockSize + style::ConvertScale(4);
-	auto dockButtons = std::array<DockButton*, 4>();
-	for (auto side = 0; side != int(dockButtons.size()); ++side) {
-		const auto button = Ui::CreateChild<DockButton>(this, side, dockSize);
-		button->setReveal(0.);
-		dockButtons[side] = button;
-	}
+	const auto dockGap = style::ConvertScale(8);
+	const auto dockPill = Ui::CreateChild<DockPill>(this);
+	dockPill->hide();
 	const auto dockLabel = QString::fromUtf8(
 		Mokagram::Lang::Tr("Куда закрепить панель"));
 	const auto dockToggle = Ui::CreateChild<BarButton>(
@@ -1348,29 +1346,32 @@ MainMenu::MainMenu(
 		bool open = false;
 	};
 	const auto dockState = dockToggle->lifetime().make_state<DockState>();
+	const auto layoutDockPill = [=](double progress) {
+		dockPill->setInlineGeometry(
+			dockToggle->x() - dockGap,
+			dockMargin,
+			progress);
+		dockPill->raise();
+		dockToggle->raise();
+		// Раскрытая пилюля не должна перекрывать аватарку: она плавно
+		// гаснет, а имя, статус и список поднимаются на её место.
+		setCoverLift(progress);
+	};
 	dockToggle->setClickedCallback([=] {
 		const auto from = dockState->slide.value(dockState->open ? 1. : 0.);
 		dockState->open = !dockState->open;
 		dockState->slide.start(
-			[=](double progress) {
-				for (const auto button : dockButtons) {
-					button->setReveal(progress);
-				}
-			},
+			layoutDockPill,
 			from,
 			dockState->open ? 1. : 0.,
 			kDockPillDuration,
 			anim::easeOutCubic);
 	});
 	widthValue() | rpl::on_next([=](int width) {
-		const auto right = width - dockMargin - dockSize;
-		dockButtons[0]->move(dockMargin, dockMargin);
-		dockButtons[2]->move(dockMargin + dockStep, dockMargin);
-		dockButtons[3]->move(right - dockStep, dockMargin);
-		dockButtons[1]->move(right, dockMargin);
 		dockToggle->move(
-			right + (dockSize - dockToggleSize) / 2,
-			dockMargin + dockStep);
+			width - dockMargin - dockToggleSize,
+			dockMargin + (DockPill::FullHeight() - dockToggleSize) / 2);
+		layoutDockPill(dockState->slide.value(dockState->open ? 1. : 0.));
 	}, dockToggle->lifetime());
 	dockToggle->show();
 	rpl::merge(
@@ -1522,8 +1523,8 @@ void MainMenu::moveBadge() {
 		+ st::semiboldFont->spacew;
 	_badge->move(
 		left,
-		st::mainMenuCoverNameTop,
-		st::mainMenuCoverNameTop + st::semiboldFont->height);
+		st::mainMenuCoverNameTop - _coverLift,
+		st::mainMenuCoverNameTop - _coverLift + st::semiboldFont->height);
 }
 
 void MainMenu::setupArchive() {
@@ -1863,15 +1864,25 @@ void MainMenu::setupMenu() {
 			}
 			entry.id = id;
 		}
-		const auto button = _menu->add(
-			CreateButtonWithIcon(
+		// Mokagram: строка в SlideWrap, чтобы её можно было скрыть из окна.
+		const auto wrap = _menu->add(
+			object_ptr<Ui::SlideWrap<Ui::SettingsButton>>(
 				_menu,
-				std::move(text),
-				rowStyle,
-				std::move(descriptor)),
-			pillMargins);
+				CreateButtonWithIcon(
+					_menu,
+					std::move(text),
+					rowStyle,
+					std::move(descriptor)),
+				pillMargins));
+		const auto button = wrap->entity();
 		Mokagram::BoxParts::MakePill(button, menuBg);
 		entry.button = button;
+		entry.row = wrap;
+		entry.setShown = [=](bool shown, bool instant) {
+			wrap->toggle(
+				shown,
+				instant ? anim::type::instant : anim::type::normal);
+		};
 		_barEntries.push_back(std::move(entry));
 		return button;
 	};
@@ -2101,6 +2112,87 @@ void MainMenu::setupMenu() {
 			_nightThemeSwitches.fire_copy(*darkMode);
 		}
 	}, _nightThemeToggle->lifetime());
+
+	// Mokagram: показ и порядок пунктов меню, как в окне панели.
+	applyMenuEntries(true);
+	Mokagram::Settings::Changed(
+	) | rpl::filter([](const QString &key) {
+		return key == u"look.menu_hidden"_q || key == u"look.menu_order"_q;
+	}) | rpl::on_next([=] {
+		applyMenuEntries(false);
+	}, lifetime());
+	for (const auto &entry : _barEntries) {
+		if (!entry.button || entry.alt) {
+			continue;
+		}
+		entry.button->events(
+		) | rpl::filter([](not_null<QEvent*> e) {
+			return e->type() == QEvent::MouseButtonRelease
+				&& static_cast<QMouseEvent*>(e.get())->button()
+					== Qt::RightButton;
+		}) | rpl::on_next([=](not_null<QEvent*>) {
+			showMenuEntriesBox();
+		}, entry.button->lifetime());
+	}
+}
+
+void MainMenu::showMenuEntriesBox() {
+	auto items = std::vector<BarItem>();
+	for (const auto &entry : _barEntries) {
+		if (entry.button) {
+			items.push_back({ entry.id, entry.text, entry.icon });
+		}
+	}
+	ShowBarBox(
+		_controller,
+		std::move(items),
+		u"look.menu_hidden"_q,
+		u"look.menu_order"_q,
+		QString::fromUtf8(Mokagram::Lang::Tr("Боковое меню")));
+}
+
+void MainMenu::applyMenuEntries(bool instant) {
+	const auto hidden = BarList(u"look.menu_hidden"_q);
+	const auto order = BarList(u"look.menu_order"_q);
+	auto entries = std::vector<const BarEntry*>();
+	for (const auto &entry : _barEntries) {
+		if (entry.row && entry.setShown) {
+			entries.push_back(&entry);
+		}
+	}
+	const auto position = [&](const BarEntry *entry) {
+		const auto index = order.indexOf(entry->id);
+		return (index < 0) ? int(order.size()) : index;
+	};
+	std::stable_sort(entries.begin(), entries.end(), [&](
+			const BarEntry *a,
+			const BarEntry *b) {
+		return position(a) < position(b);
+	});
+	// Строки пунктов занимают свои места в списке, остальные не двигаем.
+	for (auto k = 0; k != int(entries.size()); ++k) {
+		auto slots = std::vector<int>();
+		auto current = -1;
+		for (auto i = 0; i != _menu->count(); ++i) {
+			const auto widget = _menu->widgetAt(i).get();
+			const auto isEntry = std::any_of(
+				entries.begin(),
+				entries.end(),
+				[&](const BarEntry *e) { return e->row.data() == widget; });
+			if (isEntry) {
+				slots.push_back(i);
+			}
+			if (widget == entries[k]->row.data()) {
+				current = i;
+			}
+		}
+		if (current >= 0 && k < int(slots.size()) && slots[k] != current) {
+			_menu->reorderRows(current, slots[k]);
+		}
+	}
+	for (const auto entry : entries) {
+		entry->setShown(!hidden.contains(entry->id), instant);
+	}
 }
 
 void MainMenu::resizeEvent(QResizeEvent *e) {
@@ -2111,7 +2203,7 @@ void MainMenu::resizeEvent(QResizeEvent *e) {
 void MainMenu::updateControlsGeometry() {
 	_userpicButton->moveToLeft(
 		(width() - 64) / 2,
-		st::mainMenuUserpicTop - 6);
+		st::mainMenuUserpicTop - 6 - _coverLift);
 	if (_resetScaleButton) {
 		_resetScaleButton->moveToRight(0, 0);
 	}
@@ -2119,17 +2211,49 @@ void MainMenu::updateControlsGeometry() {
 		std::max(
 			(width() - _setEmojiStatus->naturalWidth()) / 2,
 			st::mainMenuCoverStatusLeft),
-		st::mainMenuCoverStatusTop,
+		st::mainMenuCoverStatusTop - _coverLift,
 		width());
 	_toggleAccounts->setGeometry(
 		0,
-		st::mainMenuCoverNameTop,
+		st::mainMenuCoverNameTop - _coverLift,
 		width(),
 		st::mainMenuCoverHeight - st::mainMenuCoverNameTop);
 	// Allow cover shadow over the scrolled content.
-	const auto top = st::mainMenuCoverHeight - st::lineWidth;
+	const auto top = coverHeight() - st::lineWidth;
 	_scroll->setGeometry(0, top, width(), height() - top);
 	updateInnerControlsGeometry();
+}
+
+int MainMenu::coverHeight() const {
+	return st::mainMenuCoverHeight - _coverLift;
+}
+
+// Mokagram: 0..1, насколько обложка свёрнута (аватарка ушла вверх).
+void MainMenu::setCoverLift(double progress) {
+	const auto lift = int(base::SafeRound(
+		style::ConvertScale(28) * progress));
+	if (progress <= 0.) {
+		_userpicButton->setGraphicsEffect(nullptr);
+		_userpicButton->show();
+	} else if (progress >= 1.) {
+		_userpicButton->hide();
+	} else {
+		auto effect = qobject_cast<QGraphicsOpacityEffect*>(
+			_userpicButton->graphicsEffect());
+		if (!effect) {
+			effect = new QGraphicsOpacityEffect(_userpicButton);
+			_userpicButton->setGraphicsEffect(effect);
+		}
+		effect->setOpacity(1. - progress);
+		_userpicButton->show();
+	}
+	if (_coverLift == lift) {
+		return;
+	}
+	_coverLift = lift;
+	moveBadge();
+	updateControlsGeometry();
+	update();
 }
 
 void MainMenu::updateInnerControlsGeometry() {
@@ -2137,7 +2261,7 @@ void MainMenu::updateInnerControlsGeometry() {
 		+ _shadow->height()
 		+ st::mainMenuSkip
 		+ _menu->height();
-	const auto available = height() - st::mainMenuCoverHeight - contentHeight;
+	const auto available = height() - coverHeight() - contentHeight;
 	const auto footerHeight = std::max(
 		available,
 		st::mainMenuFooterHeightMin);
@@ -2192,7 +2316,7 @@ void MainMenu::hideEvent(QHideEvent *e) {
 void MainMenu::paintEvent(QPaintEvent *e) {
 	auto p = Painter(this);
 	const auto clip = e->rect();
-	const auto cover = QRect(0, 0, width(), st::mainMenuCoverHeight);
+	const auto cover = QRect(0, 0, width(), coverHeight());
 
 	// Mokagram: углы меню у внутреннего края скруглены, как у профиля.
 	constexpr auto kRadius = 32;
@@ -2249,7 +2373,7 @@ void MainMenu::drawName(Painter &p) {
 	_name.drawLeftElided(
 		p,
 		(width() - nameWidth) / 2,
-		st::mainMenuCoverNameTop,
+		st::mainMenuCoverNameTop - _coverLift,
 		nameWidth,
 		width());
 }

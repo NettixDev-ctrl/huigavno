@@ -71,8 +71,11 @@ private:
 		QPointer<Ui::SettingsButton> button;
 		bool toggle = false;
 		Fn<void()> alt;
+		QPointer<Ui::RpWidget> row;
+		Fn<void(bool shown, bool instant)> setShown;
 	};
 	std::vector<BarEntry> _barEntries;
+	int _coverLift = 0;
 
 	bool eventHook(QEvent *event) override;
 	void paintEvent(QPaintEvent *e) override;
@@ -91,7 +94,11 @@ private:
 	void setupEmojiStatusDismiss();
 	void setupArchive();
 	void setupMenu();
+	void applyMenuEntries(bool instant);
+	void showMenuEntriesBox();
 	void updateControlsGeometry();
+	[[nodiscard]] int coverHeight() const;
+	void setCoverLift(double progress);
 	void updateInnerControlsGeometry();
 	void initResetScaleButton();
 	void toggleAccounts();

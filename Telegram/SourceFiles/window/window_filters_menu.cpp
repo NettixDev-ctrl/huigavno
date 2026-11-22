@@ -161,29 +161,15 @@ void FiltersMenu::setup() {
 		auto p = QPainter(&_outer);
 		p.setPen(Qt::NoPen);
 		p.setBrush(st::windowFiltersButton.textBg);
-		const auto radius = style::ConvertScale(22);
-		p.setClipRect(clip);
-		p.drawRoundedRect(_outer.rect(), radius, radius);
+		p.drawRect(clip);
 	}, _outer.lifetime());
 
 	const auto place = [=] {
-		const auto floatingInset = style::ConvertScale(6);
-		const auto width = st::windowFiltersWidth - 2 * floatingInset;
+		const auto width = st::windowFiltersWidth;
 		const auto inset = PinnedMenuInset();
-		const auto height = _parent->height()
-			- inset.top - inset.bottom - 2 * floatingInset;
-		_outer.setGeometry({
-			inset.left + floatingInset,
-			inset.top + floatingInset,
-			width,
-			std::max(height, 0),
-		});
-		auto path = QPainterPath();
-		path.addRoundedRect(
-			QRectF(_outer.rect()),
-			style::ConvertScale(22),
-			style::ConvertScale(22));
-		_outer.setMask(QRegion(path.toFillPolygon().toPolygon()));
+		const auto height = _parent->height() - inset.top - inset.bottom;
+		_outer.setGeometry({ inset.left, inset.top, width, height });
+		_outer.clearMask();
 		_menu.resizeToWidth(width);
 		_menu.move(0, 0);
 		_scroll.setGeometry(

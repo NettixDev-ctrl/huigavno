@@ -1314,6 +1314,7 @@ MainMenu::MainMenu(
 	Ui::CreateChild<Ui::FlatLabel>(_footer.get(), st::mainMenuTelegramLabel))
 , _version(AddVersionLabel(_footer)) {
 	setProperty("moka-main-menu", true);
+	setProperty("moka-floating-main-menu", true);
 
 	// Режим стримера: имя в шапке рисуется без rpl, сбрасываем кэш текста.
 	Mokagram::Streamer::Changed(
@@ -1689,7 +1690,12 @@ void MainMenu::setupSetEmojiStatus() {
 }
 
 void MainMenu::parentResized() {
-	resize(st::mainMenuWidth, parentWidget()->height());
+	const auto inset = style::ConvertScale(12);
+	setGeometry(
+		inset,
+		inset,
+		st::mainMenuWidth,
+		std::max(parentWidget()->height() - 2 * inset, 0));
 }
 
 not_null<Ui::RpWidget*> MainMenu::createDockBar(QWidget *parent, int side) {

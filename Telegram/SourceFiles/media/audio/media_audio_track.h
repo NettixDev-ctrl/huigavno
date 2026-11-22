@@ -28,7 +28,11 @@ public:
 
 	void fillFromData(bytes::vector &&data);
 	void fillFromFile(const Core::FileLocation &location);
-	void fillFromFile(const QString &filePath);
+	// Mokagram: optionally decode only an excerpt for an action sound.
+	void fillFromFile(
+		const QString &filePath,
+		crl::time startMs = 0,
+		crl::time limitMs = 0);
 
 	void playOnce(float64 volumeOverride = -1) {
 		playWithLooping(false, volumeOverride);
@@ -59,6 +63,7 @@ public:
 	~Track();
 
 private:
+	void fillFromData(bytes::vector &&data, crl::time startMs, crl::time limitMs);
 	void finish();
 	void ensureSourceCreated();
 	void playWithLooping(bool looping, float64 volumeOverride);

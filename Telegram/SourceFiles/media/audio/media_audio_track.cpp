@@ -51,14 +51,22 @@ void Track::samplePeakEach(crl::time peakDuration) {
 }
 
 void Track::fillFromData(bytes::vector &&data) {
+	fillFromData(std::move(data), 0, 0);
+}
+
+// Mokagram: seek and cap the decoded samples for an excerpt.
+void Track::fillFromData(
+		bytes::vector &&data,
+		crl::time startMs,
+		crl::time limitMs) {
 	FFMpegLoader loader(Core::FileLocation(), QByteArray(), std::move(data));
 
-	auto position = qint64(0);
-	if (!loader.open(position)) {
+	if (!loader.open(startMs)) {
 		_failed = true;
 		return;
 	}
 	auto format = loader.format();
+	const auto sampleLimit = limitMs * loader.samplesFrequency() / 1000;
 	_peakEachPosition = _peakDurationMs ? ((loader.samplesFrequency() * _peakDurationMs) / 1000) : 0;
 	const auto samplesCount = (loader.duration() * loader.samplesFrequency()) / 1000;
 	const auto peaksCount = _peakEachPosition ? (samplesCount / _peakEachPosition) : 0;
@@ -92,8 +100,14 @@ void Track::fillFromData(bytes::vector &&data) {
 			break;
 		}
 		Assert(v::is<bytes::const_span>(result));
-		const auto sampleBytes = v::get<bytes::const_span>(result);
+		auto sampleBytes = v::get<bytes::const_span>(result);
 		Assert(!sampleBytes.empty());
+		if (sampleLimit > 0) {
+			const auto bytesLeft = (sampleLimit - _samplesCount) * loader.sampleSize();
+			if (bytesLeft < sampleBytes.size()) {
+				sampleBytes = sampleBytes.first(bytesLeft);
+			}
+		}
 		_samplesCount += sampleBytes.size() / loader.sampleSize();
 		_samples.insert(_samples.end(), sampleBytes.data(), sampleBytes.data() + sampleBytes.size());
 		if (peaksCount) {
@@ -103,11 +117,13 @@ void Track::fillFromData(bytes::vector &&data) {
 				Media::Audio::IterateSamples<int16>(sampleBytes, peakCallback);
 			}
 		}
-	} while (true);
+	} while (sampleLimit <= 0 || _samplesCount < sampleLimit);
 
 	_alFormat = loader.format();
 	_sampleRate = loader.samplesFrequency();
-	_lengthMs = loader.duration();
+	_lengthMs = (sampleLimit > 0)
+		? (_samplesCount * 1000 / _sampleRate)
+		: loader.duration();
 }
 
 void Track::fillFromFile(const Core::FileLocation &location) {
@@ -120,14 +136,17 @@ void Track::fillFromFile(const Core::FileLocation &location) {
 	}
 }
 
-void Track::fillFromFile(const QString &filePath) {
+void Track::fillFromFile(
+		const QString &filePath,
+		crl::time startMs,
+		crl::time limitMs) {
 	QFile f(filePath);
 	if (f.open(QIODevice::ReadOnly)) {
 		auto size = f.size();
 		if (size > 0 && size <= kMaxFileSize) {
 			auto bytes = bytes::vector(size);
 			if (f.read(reinterpret_cast<char*>(bytes.data()), bytes.size()) == bytes.size()) {
-				fillFromData(std::move(bytes));
+				fillFromData(std::move(bytes), startMs, limitMs);
 			} else {
 				LOG(("Track Error: Could not read %1 bytes from file '%2'.").arg(bytes.size()).arg(filePath));
 				_failed = true;

@@ -42,7 +42,8 @@ public:
 	void start();
 
 	static const anim::transition &transition() {
-		return anim::easeOutCirc;
+		// Mokagram: единая кривая для экранов и внутренних окон.
+		return anim::easeOutCubic;
 	}
 
 private:

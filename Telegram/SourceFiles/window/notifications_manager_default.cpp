@@ -536,7 +536,13 @@ Widget::Widget(
 
 	Ui::Platform::InitOnTopPanel(this);
 
-	_a_opacity.start([this] { opacityAnimationCallback(); }, 0., 1., st::notifyFastAnim);
+	// Mokagram: уведомление входит мягко, а не вспыхивает линейно.
+	_a_opacity.start(
+		[this] { opacityAnimationCallback(); },
+		0.,
+		1.,
+		st::notifyFastAnim,
+		anim::easeOutCubic);
 }
 
 void Widget::opacityAnimationCallback() {
@@ -562,7 +568,9 @@ bool Widget::shiftAnimationCallback(crl::time now) {
 	if (dt >= 1.) {
 		_shift.finish();
 	} else {
-		_shift.update(dt, anim::linear);
+		// Mokagram: перестановка карточек сохраняет инерцию общей системы
+		// анимаций, вместо механического линейного скачка.
+		_shift.update(dt, anim::easeOutCubic);
 	}
 	moveByShift();
 	return (dt < 1.);
@@ -580,19 +588,24 @@ void Widget::hideSlow() {
 				}
 			});
 	} else {
-		hideAnimated(st::notifySlowHide, anim::easeInCirc);
+		hideAnimated(st::notifySlowHide, anim::easeInCubic);
 	}
 }
 
 void Widget::hideFast() {
-	hideAnimated(st::notifyFastAnim, anim::linear);
+	hideAnimated(st::notifyFastAnim, anim::easeInCubic);
 }
 
 void Widget::hideStop() {
 	if (_hiding) {
 		_hiding = false;
 		_hidingDelayed = {};
-		_a_opacity.start([this] { opacityAnimationCallback(); }, 0., 1., st::notifyFastAnim);
+		_a_opacity.start(
+			[this] { opacityAnimationCallback(); },
+			0.,
+			1.,
+			st::notifyFastAnim,
+			anim::easeOutCubic);
 	}
 }
 

@@ -112,43 +112,36 @@ void SlideAnimation::paintContents(QPainter &p) const {
 			_cacheOver,
 			QRect(QPoint(), _cacheOver.size()));
 	} else {
-		const auto coordUnder = anim::interpolate(
-			0,
-			-st::slideShift,
-			progress);
-		const auto coordOver = anim::interpolate(
-			_cacheOver.width() / retina,
-			0,
-			progress);
-		if (coordOver) {
-			p.drawPixmap(
-				QRect(0, 0, coordOver, _cacheUnder.height() / retina),
-				_cacheUnder,
-				QRect(
-					-coordUnder * retina,
-					0,
-					coordOver * retina,
-					_cacheUnder.height()));
-			p.setOpacity(progress);
-			p.fillRect(
-				0,
-				0,
-				coordOver, _cacheUnder.height() / retina,
-				st::slideFadeOutBg);
-			p.setOpacity(1);
-		}
-		p.drawPixmap(
-			QRect(QPoint(coordOver, 0), _cacheOver.size() / retina),
-			_cacheOver,
-			QRect(QPoint(), _cacheOver.size()));
+		// Mokagram: общие переходы не должны гонять весь экран из края в
+		// край. Короткий параллакс и кросс-фейд сохраняют контекст чата,
+		// настроек и инфо-панели, но ощущаются заметно легче.
+		const auto width = _cacheOver.width() / retina;
+		const auto travel = std::min(style::ConvertScale(56), width / 4);
+		const auto coordUnder = anim::interpolate(0, -travel / 3, progress);
+		const auto coordOver = anim::interpolate(travel, 0, progress);
+		const auto height = _cacheOver.height() / retina;
+
+		p.save();
+		p.setOpacity(1. - (0.32 * progress));
+		p.drawPixmap(QPoint(coordUnder, 0), _cacheUnder);
+		p.restore();
+
+		p.save();
 		p.setOpacity(progress);
-		st::slideShadow.fill(
-			p,
-			QRect(
-				coordOver - st::slideShadow.width(),
-				0,
-				st::slideShadow.width(),
-				_cacheOver.height() / retina));
+		p.drawPixmap(QPoint(coordOver, 0), _cacheOver);
+		p.restore();
+
+		if (progress > 0.) {
+			p.setOpacity(progress * 0.72);
+			st::slideShadow.fill(
+				p,
+				QRect(
+					coordOver - st::slideShadow.width(),
+					0,
+					st::slideShadow.width(),
+					height));
+			p.setOpacity(1.);
+		}
 	}
 }
 

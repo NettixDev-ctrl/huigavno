@@ -3,6 +3,7 @@
 // of MOKAGRAM_NOTICE.md (section 7(b)): keep this notice when copying.
 // mokagram-id: 7b8dec14
 #include "mokagram/music/mokagram_music_ui.h"
+#include "mokagram/music/mokagram_music_presence.h"
 #include "mokagram/ui/mokagram_box_parts.h"
 #include "mokagram/lang/mokagram_lang.h"
 #include "ui/widgets/rp_window.h"
@@ -1040,6 +1041,23 @@ void Subscribe() {
 		return;
 	}
 	queue.subscribed = true;
+	Presence::Publish([] {
+		const auto &queue = QueueState();
+		const auto state = Media::Player::instance()->getState(
+			AudioMsgId::Type::Song);
+		if (state.state != Media::Player::State::Playing
+			|| queue.current.id != queue.currentId
+			|| !UsesQueue(state.id)
+			|| !CanForwardTrack(queue.current)) {
+			return Presence::Playback();
+		}
+		return Presence::Playback{
+			.session = queue.session.get(),
+			.title = queue.current.title,
+			.artist = queue.current.artist,
+			.soundcloudId = queue.current.id.toULongLong(),
+		};
+	}, queue.lifetime);
 	Media::Player::instance()->updatedNotifier(
 	) | rpl::on_next([=](const Media::Player::TrackState &state) {
 		auto &queue = QueueState();
@@ -10214,6 +10232,27 @@ void ShowFullscreenPlayer(not_null<Window::SessionController*> controller) {
 
 void ShowFullscreenPlayerHome(not_null<Window::SessionController*> controller) {
 	ShowFullscreenPlayerAt(controller, true);
+}
+
+void Presence::OpenTrack(
+		not_null<Window::SessionController*> controller,
+		Presence::Track track) {
+	if (!track) {
+		return;
+	}
+	if (!track.soundcloudId) {
+		ShowMusicBox(controller, track.artist.isEmpty()
+			? track.title
+			: track.title + u' ' + track.artist);
+		return;
+	}
+	BindController(controller);
+	PlayAll({ Music::Track{
+		.id = QString::number(track.soundcloudId),
+		.title = std::move(track.title),
+		.artist = std::move(track.artist),
+	} });
+	ShowPlayerBox(controller);
 }
 
 void DebugGrabFullscreen(const QString &path) {

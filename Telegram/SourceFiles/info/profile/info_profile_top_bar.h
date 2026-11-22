@@ -11,6 +11,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "info/info_controller.h" // Key
 #include "info/profile/info_profile_badge.h"
 #include "info/profile/tabs/info_profile_tab_top_bar_bindings.h"
+#include "mokagram/music/mokagram_music_presence.h"
 #include "ui/controls/swipe_handler_data.h"
 #include "ui/effects/animations.h"
 #include "ui/rp_widget.h"
@@ -273,6 +274,7 @@ private:
 	const bool _hasActions;
 	const int _minForProgress;
 	std::unique_ptr<PillsRow> _pills;
+	Mokagram::Music::Presence::Track _listeningTrack;
 	rpl::variable<int> _pillsReserve = 0;
 
 	std::unique_ptr<Ui::GlareTooltip> _badgeTooltip;

@@ -24,6 +24,11 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "mokagram/misc/mokagram_misc.h"
 #include "mokagram/misc/mokagram_datereg.h"
 #include "mokagram/notes/mokagram_notes.h"
+#include "mokagram/music/mokagram_music_presence.h"
+#include "mokagram/music/mokagram_soundcloud.h"
+#include "mokagram/ui/mokagram_box_parts.h"
+
+#include <QtGui/QPainterPath>
 #include "mokagram/streamer/mokagram_streamer.h"
 #include "boxes/choose_filter_box.h"
 #include "boxes/peer_list_box.h"
@@ -1343,6 +1348,127 @@ rpl::producer<CreditsAmount> AddCreditsAction(
 	return state->balance.value();
 }
 
+// Mokagram: shared music has its own card above the personal channel.
+class ListeningCard final : public Ui::AbstractButton {
+public:
+	ListeningCard(
+		QWidget *parent,
+		not_null<Window::SessionController*> controller)
+	: AbstractButton(parent) {
+		setFocusPolicy(Qt::TabFocus);
+		setPointerCursor(true);
+		setClickedCallback([=] {
+			Mokagram::Music::Presence::OpenTrack(controller, _track);
+		});
+	}
+
+	void setTrack(Mokagram::Music::Presence::Track track) {
+		const auto coverChanged = _track.soundcloudId != track.soundcloudId;
+		_track = std::move(track);
+		if (coverChanged) {
+			loadCover();
+		}
+		setAccessibleName(_track.artist.isEmpty()
+			? _track.title
+			: _track.title + u", "_q + _track.artist);
+		update();
+	}
+
+private:
+	void loadCover() {
+		using namespace Mokagram::Music;
+		_cover = QImage();
+		const auto id = _track.soundcloudId;
+		if (!id) {
+			return;
+		}
+		const auto trackId = QString::number(id);
+		_cover = CoverForDocument(DocumentIdForTrack(trackId));
+		if (!_cover.isNull()) {
+			return;
+		}
+		Resolve(Track{ .id = trackId }, crl::guard(this, [=](
+				Track resolved,
+				const QString &error) {
+			if (!error.isEmpty() || _track.soundcloudId != id) {
+				return;
+			}
+			LoadImage(resolved.artworkUrl, crl::guard(this, [=](QImage cover) {
+				if (_track.soundcloudId == id) {
+					_cover = std::move(cover);
+					update();
+				}
+			}));
+		}));
+	}
+
+	int resizeGetHeight(int width) override {
+		return style::ConvertScale(82);
+	}
+
+	void paintEvent(QPaintEvent *e) override {
+		auto p = Painter(this);
+		auto hq = PainterHighQualityEnabler(p);
+		const auto padding = style::ConvertScale(12);
+		const auto coverSize = height() - 2 * padding;
+		const auto cover = myrtlrect(padding, padding, coverSize, coverSize);
+		const auto radius = style::ConvertScale(9);
+		if (isOver() || hasFocus()) {
+			p.setPen(Qt::NoPen);
+			p.setBrush(st::windowBgOver);
+			const auto cardRadius = style::ConvertScale(
+				Mokagram::BoxParts::kCardRadius);
+			p.drawRoundedRect(rect(), cardRadius, cardRadius);
+		}
+		if (_cover.isNull()) {
+			p.setPen(Qt::NoPen);
+			p.setBrush(st::windowBgOver);
+			p.drawRoundedRect(cover, radius, radius);
+			p.setFont(st::semiboldFont);
+			p.setPen(st::windowSubTextFg);
+			p.drawText(cover, Qt::AlignCenter, u"♫"_q);
+		} else {
+			p.save();
+			auto clip = QPainterPath();
+			clip.addRoundedRect(cover, radius, radius);
+			p.setClipPath(clip);
+			const auto side = std::min(_cover.width(), _cover.height());
+			const auto crop = QRect(
+				(_cover.width() - side) / 2,
+				(_cover.height() - side) / 2,
+				side,
+				side);
+			p.drawImage(cover, _cover, crop);
+			p.restore();
+		}
+
+		const auto left = coverSize + 2 * padding;
+		const auto available = width() - left - padding;
+		if (available <= 0) {
+			return;
+		}
+		const auto title = st::semiboldFont;
+		const auto artist = st::normalFont;
+		const auto gap = style::ConvertScale(4);
+		const auto both = !_track.artist.isEmpty();
+		const auto textHeight = title->height
+			+ (both ? gap + artist->height : 0);
+		const auto top = (height() - textHeight) / 2;
+		p.setFont(title);
+		p.setPen(st::windowFg);
+		p.drawTextLeft(left, top, width(), title->elided(_track.title, available));
+		if (both) {
+			p.setFont(artist);
+			p.setPen(st::windowSubTextFg);
+			p.drawTextLeft(left, top + title->height + gap, width(),
+				artist->elided(_track.artist, available));
+		}
+	}
+
+	Mokagram::Music::Presence::Track _track;
+	QImage _cover;
+};
+
 class DetailsFiller {
 public:
 	DetailsFiller(
@@ -1362,6 +1488,7 @@ public:
 	void buildSections();
 
 private:
+	[[nodiscard]] Section makeListeningCard(not_null<UserData*> user);
 	[[nodiscard]] Section makePersonalChannel(not_null<UserData*> user);
 	[[nodiscard]] Section makeInfo();
 	[[nodiscard]] Section makeAddAsContact(not_null<UserData*> user);
@@ -2214,6 +2341,23 @@ Section DetailsFiller::makeInfo() {
 		.shown = raw->toggledValue(),
 		.bare = false,
 	};
+}
+
+Section DetailsFiller::makeListeningCard(not_null<UserData*> user) {
+	const auto parent = _stack->layout();
+	auto result = object_ptr<ListeningCard>(parent, _controller->parentController());
+	const auto card = result.data();
+	const auto shown = card->lifetime().make_state<rpl::variable<bool>>(false);
+	Mokagram::Music::Presence::Watch(
+		user,
+		parent,
+		[=](Mokagram::Music::Presence::Track track) {
+			const auto visible = bool(track);
+			card->setTrack(std::move(track));
+			*shown = visible;
+		},
+		card->lifetime());
+	return { .widget = std::move(result), .shown = shown->value() };
 }
 
 Section DetailsFiller::makePersonalChannel(not_null<UserData*> user) {
@@ -3132,6 +3276,9 @@ void DetailsFiller::buildSections() {
 	Expects(!_topic || !_topic->creating());
 
 	if (const auto user = _sublist ? nullptr : _peer->asUser()) {
+		if (Mokagram::Music::Presence::CanWatch(user)) {
+			_stack->add(makeListeningCard(user));
+		}
 		_stack->add(makePersonalChannel(user));
 		_stack->addPlainSeparator();
 	}

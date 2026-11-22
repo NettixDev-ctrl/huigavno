@@ -8,6 +8,7 @@
 
 #include "mokagram/settings/mokagram_settings.h"
 #include "mokagram/music/mokagram_motion.h"
+#include "mokagram/music/mokagram_music_presence.h"
 #include "ui/style/style_core.h"
 #include "ui/style/style_core_palette.h"
 #include "styles/palette.h"
@@ -226,6 +227,20 @@ void RegisterSettings() {
 		.description = QString::fromUtf8(Mokagram::Lang::Tr("Подборка «Для вас» играет без конца: очередь сама пополняется под ваш вкус и текущее настроение, без повторов и пропущенного.")),
 		.kind = S::Kind::Bool,
 		.defaultValue = true,
+	});
+	playerEntry({
+		.key = Music::Presence::kShowKey,
+		.title = QString::fromUtf8(Lang::Tr("Показывать активность прослушивания")),
+		.description = QString::fromUtf8(Lang::Tr("Запрашивает у @mokamusic_testbot текущие треки пользователей из открытого профиля, чата и видимого списка чатов.")),
+		.kind = S::Kind::Bool,
+		.defaultValue = false,
+	});
+	playerEntry({
+		.key = Music::Presence::kShareKey,
+		.title = QString::fromUtf8(Lang::Tr("Показывать, что я слушаю")),
+		.description = QString::fromUtf8(Lang::Tr("Для всех аккаунтов на этом устройстве. Название, исполнитель и публичный идентификатор трека SoundCloud видны всем, кто запрашивает статус у @mokamusic_testbot.")),
+		.kind = S::Kind::Bool,
+		.defaultValue = false,
 	});
 	playerEntry({
 		.key = u"player.hide_trending"_q,

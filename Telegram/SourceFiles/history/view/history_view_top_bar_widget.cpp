@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/view/history_view_top_bar_widget.h"
 #include "mokagram/peek/mokagram_peek.h"
 #include "mokagram/notes/mokagram_notes.h"
+#include "mokagram/music/mokagram_music_presence.h"
 #include "mokagram/plugins/mokagram_plugin_install.h"
 #include <deque>
 
@@ -878,6 +879,12 @@ void TopBarWidget::mousePressEvent(QMouseEvent *e) {
 			if (!rootChatsListBar()) {
 				InvokeQueued(this, [=] { backClicked(); });
 			}
+		} else if (_info && _info->isVisible()
+			&& _info->geometry().contains(e->pos())
+			&& _listeningTrack.current()) {
+			// Mokagram: only the avatar opens the shared track.
+			Mokagram::Music::Presence::OpenTrack(
+				_controller, _listeningTrack.current());
 		} else {
 			infoClicked();
 		}
@@ -936,6 +943,21 @@ void TopBarWidget::setActiveChat(
 
 	_activeChat = activeChat;
 	_titlePeerText.clear();
+	_listeningLifetime.destroy();
+	_listeningTrack = Mokagram::Music::Presence::Track();
+	// Mokagram: bind the status to the direct chat and its own account.
+	if (activeChat.section == Dialogs::EntryState::Section::History
+		&& activeChat.key.history() && !activeChat.key.topic()) {
+		if (const auto user = activeChat.key.history()->peer->asUser()) {
+			Mokagram::Music::Presence::Watch(
+				user,
+				this,
+				[=](Mokagram::Music::Presence::Track track) {
+					_listeningTrack = std::move(track);
+				},
+				_listeningLifetime);
+		}
+	}
 	_back->clearState();
 	update();
 
@@ -1133,6 +1155,39 @@ void TopBarWidget::refreshInfoButton() {
 	if (_info) {
 		_info->setAttribute(Qt::WA_TransparentForMouseEvents);
 		_info->setAccessibleName(tr::lng_settings_section_info(tr::now));
+		// Mokagram: draw the ring above the photo, including video avatars.
+		const auto info = _info.data();
+		const auto ring = Ui::CreateChild<Ui::RpWidget>(info);
+		ring->setAttribute(Qt::WA_TransparentForMouseEvents);
+		info->sizeValue() | rpl::on_next([=](QSize size) {
+			ring->resize(size);
+		}, ring->lifetime());
+		ring->paintOn([=](QPainter &p) {
+			const auto &st = infoButtonStyle();
+			const auto x = st.photoPosition.x() < 0
+				? (ring->width() - st.photoSize) / 2
+				: st.photoPosition.x();
+			const auto y = st.photoPosition.y() < 0
+				? (ring->height() - st.photoSize) / 2
+				: st.photoPosition.y();
+			Mokagram::Music::Presence::PaintRing(
+				p, ring->myrtlrect(x, y, st.photoSize, st.photoSize));
+		});
+		_listeningTrack.value() | rpl::on_next([=](
+				const Mokagram::Music::Presence::Track &track) {
+			ring->setVisible(bool(track));
+			info->setAccessibleName(track
+				? track.title
+				: tr::lng_settings_section_info(tr::now));
+		}, ring->lifetime());
+		info->setClickedCallback([=] {
+			if (_listeningTrack.current()) {
+				Mokagram::Music::Presence::OpenTrack(
+					_controller, _listeningTrack.current());
+			} else {
+				infoClicked();
+			}
+		});
 		if (_back && _info) {
 			QWidget::setTabOrder(_back.data(), _info.data());
 		}

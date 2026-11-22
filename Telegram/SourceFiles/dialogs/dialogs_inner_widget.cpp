@@ -667,6 +667,38 @@ InnerWidget::InnerWidget(
 	refreshWithCollapsedRows(true);
 
 	setupShortcuts();
+
+	// Mokagram: poll only the direct chats in the current viewport.
+	Mokagram::Music::Presence::WatchList(
+		&session(),
+		this,
+		[=] {
+			auto ids = std::vector<uint64>();
+			if (_state != WidgetState::Default || _savedSublists
+				|| _visibleTop >= _visibleBottom) {
+				return ids;
+			}
+			const auto offset = dialogsOffset();
+			const auto &list = _shownList->all();
+			for (auto i = list.findByY(_visibleTop - offset); i != list.cend(); ++i) {
+				const auto row = (*i).get();
+				if (row->top() >= _visibleBottom - offset) {
+					break;
+				}
+				if (const auto history = row->history()) {
+					const auto user = history->peer->asUser();
+					if (user && Mokagram::Music::Presence::CanWatch(user)) {
+						ids.push_back(peerToUser(user->id).bare);
+					}
+				}
+			}
+			return ids;
+		},
+		[=](Mokagram::Music::Presence::Tracks tracks) {
+			_listeningTracks = std::move(tracks);
+			update(0, _visibleTop, width(), _visibleBottom - _visibleTop);
+		},
+		lifetime());
 }
 
 bool InnerWidget::updateEntryHeight(not_null<Entry*> entry) {
@@ -1211,6 +1243,16 @@ void InnerWidget::paintEvent(QPaintEvent *e) {
 		}
 
 		context.st = (forum || monoforum) ? &st::forumDialogRow : _st.get();
+		const auto paintListeningRing = [&] {
+			const auto user = history ? history->peer->asUser() : nullptr;
+			if (!_savedSublists && _state == WidgetState::Default && user
+				&& _listeningTracks.contains(peerToUser(user->id).bare)
+				&& Mokagram::Music::Presence::CanWatch(user)) {
+				const auto &st = *context.st;
+				Mokagram::Music::Presence::PaintRing(p, myrtlrect(
+					st.padding.left(), st.padding.top(), st.photoSize, st.photoSize));
+			}
+		};
 
 		const auto videoUserpic = validateVideoUserpic(row);
 		const auto cacheRatio = style::DevicePixelRatio();
@@ -1243,6 +1285,7 @@ void InnerWidget::paintEvent(QPaintEvent *e) {
 				cacheRatio,
 				[](QImage &) {});
 			paintCachedRowOverlays(p, row, cacheKey, context);
+			paintListeningRing();
 			return;
 		}
 
@@ -1358,6 +1401,7 @@ void InnerWidget::paintEvent(QPaintEvent *e) {
 		} else {
 			Ui::RowPainter::Paint(p, row, videoUserpic, context);
 		}
+		paintListeningRing();
 		if (context.quickActionContext) {
 			context.quickActionContext = nullptr;
 		}
@@ -2709,9 +2753,12 @@ void InnerWidget::mousePressEvent(QMouseEvent *e) {
 	_pressedChatTypeFilter = _selectedChatTypeFilter;
 
 	const auto alt = (e->modifiers() & Qt::AltModifier);
+	_listeningAvatarPressed = (!alt && !_bulkMode && _pressButton == Qt::LeftButton)
+		? listeningAvatarAt(e->globalPos())
+		: 0;
 	if (alt && showChatPreview()) {
 		return;
-	} else if (!alt && isUserpicPress()) {
+	} else if (!alt && !_listeningAvatarPressed && isUserpicPress()) {
 		scheduleChatPreview(e->globalPos());
 	}
 
@@ -3236,6 +3283,7 @@ void InnerWidget::mousePressReleased(
 		_controller->cancelScheduledPreview();
 	}
 	const auto pressButton = base::take(_pressButton);
+	const auto listeningAvatarPressed = base::take(_listeningAvatarPressed);
 
 	const auto wasDragging = finishReorderOnRelease();
 
@@ -3307,6 +3355,12 @@ void InnerWidget::mousePressReleased(
 	}
 	updateSelectedRow();
 	if (!wasDragging && button == Qt::LeftButton) {
+		if (listeningAvatarPressed
+			&& listeningAvatarAt(globalPosition) == listeningAvatarPressed) {
+			Mokagram::Music::Presence::OpenTrack(
+				_controller, _listeningTracks.at(listeningAvatarPressed));
+			return;
+		}
 		if ((collapsedPressed >= 0 && collapsedPressed == _collapsedSelected)
 			|| (pressed
 				&& pressed == _selected
@@ -6311,6 +6365,24 @@ ChosenRow InnerWidget::computeChosenRow() const {
 		}
 	}
 	return ChosenRow();
+}
+
+uint64 InnerWidget::listeningAvatarAt(QPoint globalPosition) const {
+	if (_state != WidgetState::Default || !_selected || _savedSublists) {
+		return 0;
+	}
+	const auto history = _selected->history();
+	const auto user = history ? history->peer->asUser() : nullptr;
+	if (!user || !Mokagram::Music::Presence::CanWatch(user)) {
+		return 0;
+	}
+	const auto id = peerToUser(user->id).bare;
+	const auto &st = *_st;
+	const auto avatar = myrtlrect(st.padding.left(), st.padding.top(),
+		st.photoSize, st.photoSize).translated(0, dialogsOffset() + _selected->top());
+	return _listeningTracks.contains(id) && avatar.contains(mapFromGlobal(globalPosition))
+		? id
+		: 0;
 }
 
 bool InnerWidget::isUserpicPress() const {

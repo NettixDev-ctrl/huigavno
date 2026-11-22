@@ -1288,7 +1288,10 @@ void TopBar::setupUserpicButton(
 		not_null<Window::SessionController*> controller) {
 	_userpicButton = base::make_unique_q<Userpic>(
 		this,
-		[=] { return _hasStories; });
+		[=] {
+			return _hasStories
+				&& !(_listeningTrack && _progress.current() > 0.85);
+		});
 
 	if (_savedMessages) {
 		_userpicButton->setAttribute(Qt::WA_TransparentForMouseEvents, true);
@@ -1368,19 +1371,43 @@ void TopBar::setupUserpicButton(
 		if (canSuggestPhoto()) {
 			return true;
 		}
+		if (_hasStories && _listeningTrack) {
+			return true;
+		}
 		if (_hasStories || canReport()) {
 			return !!_peer->userpicPhotoId();
 		}
 		return false;
 	};
 
-	const auto invalidate = [=] {
-		_userpicUniqueKey = InMemoryKey();
-		const auto hasLeftButton = _peer->userpicPhotoId() || _hasStories;
+	const auto updateUserpicAction = [=] {
+		const auto hasLeftButton = _peer->userpicPhotoId()
+			|| _hasStories
+			|| bool(_listeningTrack);
 		_userpicButton->setAttribute(
 			Qt::WA_TransparentForMouseEvents,
 			!hasLeftButton && !hasMenu());
 		_userpicButton->setPointerCursor(hasLeftButton);
+	};
+	if (_source == Source::Profile) {
+		if (const auto user = _peer->asUser()) {
+			Mokagram::Music::Presence::Watch(
+				user,
+				this,
+				[=](Mokagram::Music::Presence::Track track) {
+					_listeningTrack = std::move(track);
+					_userpicButton->setAccessibleName(_listeningTrack
+						? _listeningTrack.title
+						: tr::lng_mediaview_profile_photo(tr::now));
+					updateUserpicAction();
+					update();
+				},
+				_userpicButton->lifetime());
+		}
+	}
+	const auto invalidate = [=] {
+		_userpicUniqueKey = InMemoryKey();
+		updateUserpicAction();
 		updateVideoUserpic();
 		_peer->session().downloaderTaskFinished(
 		) | rpl::filter([=] {
@@ -1533,6 +1560,12 @@ void TopBar::setupUserpicButton(
 				this,
 				st::popupMenuWithIcons);
 
+			if (_hasStories && _listeningTrack) {
+				(*menu)->addAction(
+					tr::lng_view_button_story(tr::now),
+					[=] { controller->openPeerStories(_peer->id); });
+			}
+
 			if (_peer->userpicPhotoId()) {
 				(*menu)->addAction(
 					tr::lng_profile_open_photo(tr::now),
@@ -1654,6 +1687,9 @@ void TopBar::setupUserpicButton(
 						});
 					}
 				}
+			} else if (_listeningTrack && _progress.current() > 0.85) {
+				// Mokagram: a listening ring opens the shared track.
+				Mokagram::Music::Presence::OpenTrack(controller, _listeningTrack);
 			} else if (_hasStories) {
 				controller->openPeerStories(_peer->id);
 			} else {
@@ -2957,6 +2993,10 @@ void TopBar::paintEvent(QPaintEvent *e) {
 
 	if (clipBounds.intersects(geometry)) {
 		paintUserpic(p, geometry);
+		// Mokagram: the listening ring fits inside the story outline.
+		if (_listeningTrack && _progress.current() > 0.85) {
+			Mokagram::Music::Presence::PaintRing(p, geometry);
+		}
 		paintStoryOutline(p, geometry);
 	}
 

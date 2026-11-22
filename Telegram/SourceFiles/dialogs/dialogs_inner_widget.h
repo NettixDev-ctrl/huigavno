@@ -18,6 +18,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "dialogs/dialogs_inner_widget_accessibility.h"
 #include "dialogs/dialogs_key.h"
 #include "lang/lang_keys.h"
+#include "mokagram/music/mokagram_music_presence.h"
 #include "ui/effects/animations.h"
 #include "ui/dragging_scroll_manager.h"
 #include "ui/rows_scroll_cache.h"
@@ -309,6 +310,8 @@ private:
 	struct SponsoredSearchResult;
 	struct PeerSearchResult;
 	struct TagCache;
+
+	[[nodiscard]] uint64 listeningAvatarAt(QPoint globalPosition) const;
 
 	enum class JumpSkip {
 		PreviousOrBegin,
@@ -731,6 +734,8 @@ private:
 
 	int _visibleTop = 0;
 	int _visibleBottom = 0;
+	Mokagram::Music::Presence::Tracks _listeningTracks;
+	uint64 _listeningAvatarPressed = 0;
 	QString _filter, _hashtagFilter;
 
 	std::vector<std::unique_ptr<HashtagResult>> _hashtagResults;

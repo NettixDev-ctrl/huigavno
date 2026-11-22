@@ -7,6 +7,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
+#include "mokagram/music/mokagram_music_presence.h"
+
 #include "ui/rp_widget.h"
 #include "ui/unread_badge.h"
 #include "ui/effects/animations.h"
@@ -269,6 +271,8 @@ private:
 	int _narrowWidth = 0;
 
 	Ui::Text::String _titlePeerText;
+	rpl::variable<Mokagram::Music::Presence::Track> _listeningTrack;
+	rpl::lifetime _listeningLifetime;
 	bool _titlePeerTextOnline = false;
 	int _leftTaken = 0;
 	int _rightTaken = 0;

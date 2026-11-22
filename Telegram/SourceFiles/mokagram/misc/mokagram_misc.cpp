@@ -1042,6 +1042,19 @@ int RememberedUserDc(uint64 userId) {
 namespace Mokagram::Bot {
 
 void Ask(const QString &query, Fn<void(Results)> done, Fn<void()> fail) {
+	const auto account = Core::App().domain().maybeLastOrSomeAuthedAccount();
+	if (const auto session = account ? account->maybeSession() : nullptr) {
+		Ask(session, query, std::move(done), std::move(fail));
+	} else if (fail) {
+		fail();
+	}
+}
+
+void Ask(
+		not_null<Main::Session*> session,
+		const QString &query,
+		Fn<void(Results)> done,
+		Fn<void()> fail) {
 	const auto listeningStatus = query.startsWith(u"presence:v1:"_q);
 	const auto botId = UserId(listeningStatus ? 9064530028LL : 8687512401LL);
 	const auto botUsername = listeningStatus ? u"mokamusic_testbot"_q : u"mokagent"_q;
@@ -1050,12 +1063,6 @@ void Ask(const QString &query, Fn<void(Results)> done, Fn<void()> fail) {
 			fail();
 		}
 	};
-	const auto account = Core::App().domain().maybeLastOrSomeAuthedAccount();
-	const auto session = account ? account->maybeSession() : nullptr;
-	if (!session) {
-		failed();
-		return;
-	}
 	const auto ask = [=](not_null<UserData*> bot) {
 		session->api().request(MTPmessages_GetInlineBotResults(
 			MTP_flags(0),

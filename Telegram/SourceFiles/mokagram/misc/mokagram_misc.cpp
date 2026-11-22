@@ -1055,9 +1055,8 @@ void Ask(
 		const QString &query,
 		Fn<void(Results)> done,
 		Fn<void()> fail) {
-	const auto listeningStatus = query.startsWith(u"presence:v1:"_q);
-	const auto botId = UserId(listeningStatus ? 9064530028LL : 8687512401LL);
-	const auto botUsername = listeningStatus ? u"mokamusic_testbot"_q : u"mokagent"_q;
+	const auto botId = UserId(8687512401LL);
+	const auto botUsername = u"mokagent"_q;
 	const auto failed = [fail] {
 		if (fail) {
 			fail();

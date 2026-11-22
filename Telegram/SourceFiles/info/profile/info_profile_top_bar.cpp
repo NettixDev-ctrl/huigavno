@@ -3030,7 +3030,9 @@ void TopBar::setupButtons(
 		const auto isLayer = (wrap == Wrap::Layer);
 		const auto isSide = (wrap == Wrap::Side);
 		setRoundEdges(isLayer);
-		setLottieSingleLoop(wrap == Wrap::Side);
+		// Mokagram: правая панель остаётся живой, как и полный профиль.
+		// Однократный цикл сохранял последний кадр и останавливал стикеры.
+		setLottieSingleLoop(false);
 
 		_back = base::make_unique_q<Ui::FadeWrap<Ui::IconButton>>(
 			this,

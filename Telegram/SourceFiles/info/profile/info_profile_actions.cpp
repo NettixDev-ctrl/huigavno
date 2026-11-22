@@ -27,7 +27,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "mokagram/notes/mokagram_notes.h"
 #include "mokagram/music/mokagram_music_presence.h"
 #include "mokagram/music/mokagram_soundcloud.h"
-#include "mokagram/settings/mokagram_settings_box.h"
 #include "mokagram/ui/mokagram_box_parts.h"
 
 #include <QtGui/QPainterPath>
@@ -1383,9 +1382,6 @@ public:
 			}
 			update();
 		}, lifetime());
-		Mokagram::Settings::RowIconsUpdated() | rpl::on_next([=] {
-			update();
-		}, lifetime());
 	}
 
 	void setTrack(Mokagram::Music::Presence::Track track) {
@@ -1448,9 +1444,6 @@ private:
 		auto hq = PainterHighQualityEnabler(p);
 		const auto padding = style::ConvertScale(16);
 		const auto gap = style::ConvertScale(12);
-		const auto coverSize = height() - 2 * padding;
-		const auto cover = myrtlrect(padding, padding, coverSize, coverSize);
-		const auto radius = style::ConvertScale(9);
 		const auto surface = st::windowBgOver->c;
 		const auto base = _profileColor
 			? Ui::BlendColors(surface, *_profileColor, 0.7)
@@ -1486,7 +1479,10 @@ private:
 				cardRadius - inset);
 		}
 		const auto hasCover = !_cover.isNull();
+		const auto coverSize = height() - 2 * padding;
 		if (hasCover) {
+			const auto cover = myrtlrect(padding, padding, coverSize, coverSize);
+			const auto radius = style::ConvertScale(9);
 			p.save();
 			auto clip = QPainterPath();
 			clip.addRoundedRect(cover, radius, radius);
@@ -1501,37 +1497,8 @@ private:
 			p.restore();
 		}
 
-		const auto left = padding + coverSize + gap;
-		auto available = width() - left - padding;
-		const auto iconSize = style::ConvertScale(20);
-		const auto trailingIcon = hasCover && available > iconSize + 2 * gap;
-		if (!hasCover || trailingIcon) {
-			const auto icon = myrtlrect(
-				trailingIcon ? width() - padding - iconSize
-					: padding + (coverSize - iconSize) / 2,
-				(height() - iconSize) / 2,
-				iconSize,
-				iconSize);
-			if (!_icon) {
-				_icon = Mokagram::Settings::AltIconEmoji(
-					u"🎵"_q, [=] { update(); }, iconSize);
-			}
-			if (_icon && _icon->ready()) {
-				_icon->paint(p, {
-					.textColor = primary,
-					.now = crl::now(),
-					.position = icon.topLeft(),
-					.paused = true,
-				});
-			} else if (!hasCover) {
-				p.setFont(st::semiboldFont);
-				p.setPen(secondary);
-				p.drawText(cover, Qt::AlignCenter, u"♫"_q);
-			}
-			if (trailingIcon) {
-				available -= iconSize + gap;
-			}
-		}
+		const auto left = padding + (hasCover ? coverSize + gap : 0);
+		const auto available = width() - left - padding;
 		if (available <= 0) {
 			return;
 		}
@@ -1556,7 +1523,6 @@ private:
 	Mokagram::Music::Presence::Track _track;
 	QImage _cover;
 	std::optional<QColor> _profileColor;
-	std::unique_ptr<Ui::Text::CustomEmoji> _icon;
 };
 
 class DetailsFiller {

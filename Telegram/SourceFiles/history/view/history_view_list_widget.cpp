@@ -3744,7 +3744,7 @@ void ListWidget::paintUserpics(
 						userpicTop,
 						st::msgPhotoSize,
 						st::msgPhotoSize,
-						view->width()));
+						view->width()), crl::now());
 				}
 			} else if (const auto info = item->displayHiddenSenderInfo()) {
 				if (info->customUserpic.empty()) {

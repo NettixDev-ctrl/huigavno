@@ -2607,7 +2607,9 @@ void Message::paintFromName(
 		context,
 		colorIndex(),
 		colorCollectible());
-	// Mokagram: значок слева от имени у тех, кому выдана галочка.
+	// Mokagram: дополнительный бейдж идёт в общем ряду после имени, как
+	// обычный emoji-status. Так длинное имя не налезает на значок.
+	auto mokaBadge = static_cast<Ui::Text::CustomEmoji*>(nullptr);
 	if (from) {
 		if (const auto user = from->asUser()) {
 			const auto details = ::Mokagram::Badges::Synthetic(user);
@@ -2620,19 +2622,13 @@ void Message::paintFromName(
 							details.iconId,
 							[=] { that->customEmojiRepaint(); }));
 				}
-				clearCustomEmojiRepaint();
-				emoji->paint(p, {
-					.textColor = nameFg,
-					.now = context.now,
-					.position = QPoint(availableLeft - 2, trect.top() - 1),
-					.paused = true,
-				});
-				const auto skip = emoji->width() - 4 + st::msgServiceFont->spacew;
-				availableLeft += skip;
-				availableWidth -= skip;
+				mokaBadge = emoji.get();
 			}
 		}
 	}
+	const auto mokaBadgeSkip = mokaBadge
+		? (mokaBadge->width() + st::msgServiceFont->spacew)
+		: 0;
 	const auto nameText = [&] {
 		if (from) {
 			validateFromNameText(from);
@@ -2651,11 +2647,25 @@ void Message::paintFromName(
 	const auto nameAvailableWidth = std::max(
 		((statusWidth && availableWidth > statusWidth)
 			? (availableWidth - statusWidth)
-			: availableWidth) - viaSkipWidth,
+			: availableWidth) - mokaBadgeSkip - viaSkipWidth,
 		0);
+	const auto nameWidth = std::min(
+		nameText->maxWidth(),
+		nameAvailableWidth);
+	const auto iconsLeft = availableLeft + nameWidth;
+	if (mokaBadge) {
+		clearCustomEmojiRepaint();
+		mokaBadge->paint(p, {
+			.textColor = nameFg,
+			.now = context.now,
+			.position = QPoint(
+				iconsLeft,
+				trect.top() + (st::msgNameFont->height - mokaBadge->height()) / 2),
+			.paused = context.paused || On(PowerSaving::kEmojiStatus),
+		});
+	}
 	if (statusWidth && availableWidth > statusWidth) {
-		const auto x = availableLeft
-			+ std::min(nameAvailableWidth, nameText->maxWidth());
+		const auto x = iconsLeft + mokaBadgeSkip;
 		const auto y = trect.top();
 		auto color = nameFg;
 		color.setAlpha(115);
@@ -2693,9 +2703,6 @@ void Message::paintFromName(
 	p.setFont(st::msgNameFont);
 	p.setPen(nameFg);
 	const auto nameLinkHandler = fromLink();
-	const auto nameWidth = std::min(
-		nameText->maxWidth(),
-		nameAvailableWidth);
 	if (!from) {
 		if (const auto tooltip = Get<HiddenSenderTooltip>()) {
 			tooltip->linkRect = QRect(
@@ -2726,6 +2733,7 @@ void Message::paintFromName(
 		.elisionLines = 1,
 	});
 	const auto skipWidth = nameWidth
+		+ mokaBadgeSkip
 		+ (_fromNameStatus
 			? (st::dialogsPremiumIcon.icon.width()
 				+ st::msgServiceFont->spacew)

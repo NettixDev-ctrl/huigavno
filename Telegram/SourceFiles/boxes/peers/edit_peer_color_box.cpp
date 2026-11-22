@@ -47,6 +47,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "lottie/lottie_icon.h"
 #include "lottie/lottie_single_player.h"
 #include "main/main_session.h"
+#include "mokagram/plugins/mokagram_plugin_install.h"
+#include "mokagram/ui/mokagram_box_parts.h"
 #include "settings/settings_common.h"
 #include "settings/sections/settings_premium.h"
 #include "ui/boxes/boost_box.h"
@@ -84,6 +86,21 @@ using namespace Settings;
 constexpr auto kFakeChannelId = ChannelId(0xFFFFFFF000ULL);
 constexpr auto kFakeWebPageId = WebPageId(0xFFFFFFFF00000000ULL);
 constexpr auto kUnsetColorIndex = uint8(0xFF);
+constexpr auto kAppearanceInset = 14;
+constexpr auto kAppearanceGap = 8;
+
+// Mokagram: group the personal appearance controls on a tonal surface.
+not_null<Ui::VerticalLayout*> AddAppearanceCard(
+		not_null<Ui::VerticalLayout*> container) {
+	const auto inset = style::ConvertScale(kAppearanceInset);
+	const auto card = container->add(
+		object_ptr<Ui::VerticalLayout>(container),
+		QMargins(inset, style::ConvertScale(kAppearanceGap), inset, 0));
+	card->paintOn([=](QPainter &p) {
+		Mokagram::BoxParts::PaintCard(p, card->rect());
+	});
+	return card;
+}
 
 base::unique_qptr<Ui::RpWidget> CreateEmptyPlaceholder(
 		not_null<Ui::RpWidget*> parent,
@@ -141,6 +158,13 @@ base::unique_qptr<Ui::RpWidget> CreateEmptyPlaceholder(
 		+ (nextLabelHeight ? st::normalFont->height : 0)
 		+ padding.top() + padding.bottom();
 	container->resize(width, totalHeight);
+	const auto inset = style::ConvertScale(kAppearanceInset);
+	// Mokagram: frame the empty state without changing the gift grid.
+	container->paintOn([=](QPainter &p) {
+		Mokagram::BoxParts::PaintCard(
+			p,
+			container->rect().marginsRemoved(QMargins(inset, 0, inset, 0)));
+	});
 
 	container->sizeValue(
 	) | rpl::on_next([=](QSize size) {
@@ -357,10 +381,18 @@ void PreviewWrap::paintEvent(QPaintEvent *e) {
 	const auto clip = e->rect();
 
 	p.setClipRect(clip);
+	// Mokagram: keep the chat wallpaper and message inside the preview card.
+	if (_peer->isSelf()) {
+		const auto radius = style::ConvertScale(Mokagram::BoxParts::kCardRadius);
+		auto path = QPainterPath();
+		path.addRoundedRect(QRectF(rect()), radius, radius);
+		p.setRenderHint(QPainter::Antialiasing);
+		p.setClipPath(path, Qt::IntersectClip);
+	}
 	Window::SectionWidget::PaintBackground(
 		p,
 		_theme.get(),
-		QSize(_box->width(), _box->window()->height()),
+		QSize(_peer->isSelf() ? width() : _box->width(), _box->window()->height()),
 		clip);
 
 	auto context = _theme->preparePaintContext(
@@ -1499,10 +1531,18 @@ Fn<void(int)> CreateTabsWidget(
 		not_null<Ui::VerticalLayout*> container,
 		const std::vector<QString> &labels,
 		const std::vector<Fn<void()>> &callbacks) {
+	// Mokagram: use the theme accent for the selected tab.
+	static const auto tabsStyle = [] {
+		auto result = st::infoProfileTabsStrip;
+		result.fgActive = st::windowFgActive;
+		result.bgActive = st::windowBgActive;
+		result.ripple.color = st::windowBgRipple;
+		return result;
+	}();
 	const auto tabs = container->add(
 		object_ptr<Info::Profile::TabsStrip>(
 			container,
-			st::infoProfileTabsStrip),
+			tabsStyle),
 		st::boxRowPadding,
 		style::al_top);
 
@@ -1539,6 +1579,7 @@ not_null<Info::Profile::TopBar*> CreateProfilePreview(
 		not_null<Ui::VerticalLayout*> container,
 		std::shared_ptr<ChatHelpers::Show> show,
 		not_null<PeerData*> peer) {
+	const auto inset = style::ConvertScale(kAppearanceInset);
 	const auto preview = container->add(
 		object_ptr<Info::Profile::TopBar>(
 			container,
@@ -1550,10 +1591,10 @@ not_null<Info::Profile::TopBar*> CreateProfilePreview(
 				.peer = peer,
 				.backToggles = rpl::single(false),
 				.showFinished = box->showFinishes(),
-			}
-		));
+			}),
+		peer->isSelf() ? QMargins(inset, 0, inset, 0) : QMargins());
 	preview->resize(
-		container->width(),
+		preview->width(),
 		st::infoProfileTopBarNoActionsHeightMax);
 	preview->setAttribute(Qt::WA_TransparentForMouseEvents);
 	return preview;
@@ -1887,6 +1928,7 @@ void EditPeerColorSection(
 	if (group) {
 		appendProfileSettings(container, peer->asChannel());
 	} else {
+		const auto inset = style::ConvertScale(kAppearanceInset);
 		container->add(object_ptr<PreviewWrap>(
 			box,
 			style,
@@ -1894,14 +1936,23 @@ void EditPeerColorSection(
 			peer,
 			state->index.value(),
 			state->emojiId.value(),
-			state->collectible.value()));
+			state->collectible.value()),
+			peer->isSelf() ? QMargins(inset, 0, inset, 0) : QMargins());
 
+		// Mokagram: use a shared card for the personal color and reply options.
+		const auto options = peer->isSelf()
+			? AddAppearanceCard(container)
+			: container;
+		const auto pad = style::ConvertScale(16);
+		const auto descriptionMargin = peer->isSelf()
+			? QMargins(pad, style::ConvertScale(8), pad, style::ConvertScale(12))
+			: st::peerAppearanceDividerTextMargin;
 		auto indices = peer->session().api().peerColors().suggestedValue();
 		const auto margin = st::settingsColorRadioMargin;
 		const auto skip = st::settingsColorRadioSkip;
-		container->add(
+		options->add(
 			object_ptr<Ui::ColorSelector>(
-				container,
+				options,
 				style,
 				std::move(indices),
 				state->index.value(),
@@ -1916,16 +1967,16 @@ void EditPeerColorSection(
 			{ margin, skip, margin, skip });
 
 		Ui::AddDividerText(
-			container,
+			options,
 			(peer->isSelf()
 				? tr::lng_settings_color_about()
 				: tr::lng_settings_color_about_channel()),
-			st::peerAppearanceDividerTextMargin);
+			descriptionMargin);
 
-		const auto iconWrap = container->add(
+		const auto iconWrap = options->add(
 			object_ptr<Ui::SlideWrap<Ui::VerticalLayout>>(
-				container,
-				object_ptr<Ui::VerticalLayout>(container)));
+				options,
+				object_ptr<Ui::VerticalLayout>(options)));
 		const auto iconInner = iconWrap->entity();
 
 		Ui::AddSkip(iconInner, st::settingsColorSampleSkip);
@@ -1948,7 +1999,7 @@ void EditPeerColorSection(
 			(peer->isSelf()
 				? tr::lng_settings_color_emoji_about()
 				: tr::lng_settings_color_emoji_about_channel()),
-			st::peerAppearanceDividerTextMargin);
+			descriptionMargin);
 
 		iconWrap->toggleOn(state->collectible.value(
 		) | rpl::map([](const std::optional<Ui::ColorCollectible> &value) {
@@ -2150,7 +2201,9 @@ void EditPeerProfileColorSection(
 
 	ProcessButton(button);
 
+	// Mokagram: use the same side insets for the preview and its controls.
 	const auto preview = CreateProfilePreview(box, container, show, peer);
+	const auto options = AddAppearanceCard(container);
 
 	const auto peerColors = &peer->session().api().peerColors();
 	const auto indices = peerColors->profileColorIndices();
@@ -2192,9 +2245,9 @@ void EditPeerProfileColorSection(
 
 	const auto margin = st::settingsColorRadioMargin;
 	const auto skip = st::settingsColorRadioSkip;
-	state->selector = container->add(
+	state->selector = options->add(
 		object_ptr<Ui::ColorSelector>(
-			box,
+			options,
 			indices,
 			state->index.current(),
 			setIndex,
@@ -2204,9 +2257,8 @@ void EditPeerProfileColorSection(
 			}),
 		{ margin, skip, margin, skip });
 
-	Ui::AddSkip(container, st::settingsColorSampleSkip);
-	const auto emojiButton = container->add(CreateEmojiIconButton(
-		container,
+	const auto emojiButton = options->add(CreateEmojiIconButton(
+		options,
 		show,
 		style,
 		peer,
@@ -2222,10 +2274,10 @@ void EditPeerProfileColorSection(
 		highlights->emojiButton = emojiButton;
 	}
 
-	const auto resetWrap = container->add(
+	const auto resetWrap = options->add(
 		object_ptr<Ui::SlideWrap<Ui::VerticalLayout>>(
-			container,
-			object_ptr<Ui::VerticalLayout>(container)));
+			options,
+			object_ptr<Ui::VerticalLayout>(options)));
 	const auto resetInner = resetWrap->entity();
 
 	Ui::AddSkip(resetInner, st::settingsColorSampleSkip);
@@ -2250,9 +2302,9 @@ void EditPeerProfileColorSection(
 	) | rpl::map([](uint8 index) { return index != kUnsetColorIndex; }));
 	resetWrap->finishAnimating();
 
-	Ui::AddSkip(container, st::settingsColorSampleSkip);
+	const auto pad = style::ConvertScale(16);
 	const auto about = Ui::AddDividerText(
-		container,
+		options,
 		tr::lng_settings_color_profile_about(
 			lt_link,
 			tr::lng_settings_color_profile_about_link(
@@ -2262,8 +2314,8 @@ void EditPeerProfileColorSection(
 			) | rpl::map([=](TextWithEntities t) {
 				return tr::link(std::move(t), u"internal:"_q);
 			}),
-			tr::rich));
-	Ui::AddSkip(container, st::settingsColorSampleSkip);
+			tr::rich),
+		QMargins(pad, style::ConvertScale(8), pad, pad));
 	about->setClickHandlerFilter([=](auto...) {
 		aboutCallback();
 		return false;
@@ -2397,44 +2449,69 @@ void EditPeerColorBox(
 			Window::Theme::DefaultChatThemeOn(box->lifetime()));
 		style->apply(theme.get());
 	}
-	box->setTitle(peer->isSelf()
-		? tr::lng_settings_color_title()
-		: tr::lng_edit_channel_color());
-	box->setWidth(st::boxWideWidth);
-	box->setStyle(st::giftBox);
-	box->addTopButton(st::boxTitleClose, [=] {
-		box->closeBox();
-	});
 	if (peer->isChannel()) {
+		box->setTitle(tr::lng_edit_channel_color());
+		box->setWidth(st::boxWideWidth);
+		box->setStyle(st::giftBox);
+		box->addTopButton(st::boxTitleClose, [=] { box->closeBox(); });
 		const auto button = box->addButton(
 			tr::lng_settings_color_apply(),
 			[] {});
 		EditPeerColorSection(box, box->verticalLayout(), button, show, peer, style, theme, nullptr);
 		return;
 	}
-	const auto buttonContainer = box->addButton(
-		rpl::single(QString()),
-		[] {});
+	// Mokagram: pin the personal appearance header and apply action.
+	Mokagram::Plugins::RoundedWindow(box);
+	const auto inset = style::ConvertScale(kAppearanceInset);
+	const auto gap = style::ConvertScale(kAppearanceGap);
+	const auto pinned = box->setPinnedToTopContent(
+		object_ptr<Ui::VerticalLayout>(box));
+	const auto header = pinned->add(
+		object_ptr<Ui::RpWidget>(pinned),
+		QMargins(inset, style::ConvertScale(10), inset, 0));
+	header->resize(header->width(), style::ConvertScale(40));
+	const auto close = Mokagram::Plugins::MakeHeaderButton(
+		header,
+		true,
+		[=] { box->closeBox(); });
+	close->setAccessibleName(tr::lng_close(tr::now));
+	const auto title = Ui::CreateChild<Ui::FlatLabel>(
+		header,
+		tr::lng_settings_color_title(),
+		st::boxTitle);
+	rpl::combine(header->widthValue(), title->sizeValue(), close->sizeValue()
+	) | rpl::on_next([=](int width, QSize label, QSize button) {
+		close->moveToLeft(0, (header->height() - button.height()) / 2);
+		title->moveToLeft(
+			(width - label.width()) / 2,
+			(header->height() - label.height()) / 2);
+	}, header->lifetime());
+
+	static const auto applyStyle = [] {
+		auto result = Mokagram::BoxParts::PillActive();
+		result.height = style::ConvertScale(44);
+		result.textTop = (result.height - result.style.font->height) / 2;
+		return result;
+	}();
+	const auto footer = box->setPinnedToBottomContent(
+		object_ptr<Ui::RpWidget>(box));
+	footer->resize(box->width(), gap + applyStyle.height + inset);
 	const auto content = box->verticalLayout();
 
 	const auto profileButton = Ui::CreateChild<Ui::RoundButton>(
-		buttonContainer,
+		footer,
 		tr::lng_settings_color_apply(),
-		box->getDelegate()->style().button);
-	profileButton->setTextTransform(Ui::RoundButtonTextTransform::ToUpper);
+		applyStyle);
 	const auto nameButton = Ui::CreateChild<Ui::RoundButton>(
-		buttonContainer,
+		footer,
 		tr::lng_settings_color_apply(),
-		box->getDelegate()->style().button);
-	nameButton->setTextTransform(Ui::RoundButtonTextTransform::ToUpper);
-	rpl::combine(
-		buttonContainer->widthValue(),
-		profileButton->sizeValue(),
-		nameButton->sizeValue()
-	) | rpl::on_next([=](int w, QSize, QSize) {
-		profileButton->resizeToWidth(w);
-		nameButton->resizeToWidth(w);
-	}, buttonContainer->lifetime());
+		applyStyle);
+	footer->widthValue() | rpl::on_next([=](int width) {
+		for (const auto button : { profileButton, nameButton }) {
+			button->setFullWidth(width - 2 * inset);
+			button->moveToLeft(inset, gap);
+		}
+	}, footer->lifetime());
 
 	auto nameOwned = object_ptr<Ui::SlideWrap<Ui::VerticalLayout>>(
 		content,
@@ -2448,29 +2525,38 @@ void EditPeerColorBox(
 	const auto profile = profileWrap->entity();
 
 	const auto showName = [=] {
+		if (nameWrap->toggled()) {
+			return;
+		}
 		nameWrap->toggle(true, anim::type::instant);
 		profileWrap->toggle(false, anim::type::instant);
 		profileButton->hide();
 		nameButton->show();
+		// Mokagram: show the preview when switching from a scrolled tab.
+		box->scrollToY(0);
 	};
 
 	const auto switchTab = CreateTabsWidget(
-		content,
+		pinned,
 		{
 			tr::lng_settings_color_tab_profile(tr::now),
 			tr::lng_settings_color_tab_name(tr::now),
 		},
 		{
 			[=] {
+				if (profileWrap->toggled()) {
+					return;
+				}
 				nameWrap->toggle(false, anim::type::instant);
 				profileWrap->toggle(true, anim::type::instant);
 				nameButton->hide();
 				profileButton->show();
+				box->scrollToY(0);
 			},
 			showName,
 		});
 
-	Ui::AddSkip(content);
+	Ui::AddSkip(pinned, gap);
 	nameWrap->toggle(false, anim::type::instant);
 	profileWrap->toggle(true, anim::type::instant);
 	nameButton->hide();

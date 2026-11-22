@@ -12,6 +12,7 @@
 - The profile shows a track card above Channel with the track title and artist. The chat header shows the usual status and a ring around the avatar.
 - The profile shows the music badge with the listening ring when the icon is available. The ring also appears while the icon loads.
 - The regular chat list shows the ring on direct-chat avatars. Open chats and threads show the same ring on visible message avatars from eligible users. The ring follows the displayed sender and leaves avatar clicks intact.
+- A confirmed listening status appears in any visible view of that user in the same signed-in account. The status keeps its original expiry time across views.
 - The profile card shows the track cover when the player cache or SoundCloud has one.
 - Activating the card or a ringed avatar opens the track in the player when its public SoundCloud ID is available. Other tracks open music search with their shared text.
 - The track and ring disappear after a pause, stop, or opt-out reaches the viewer. The status also expires when the publisher loses its connection or closes the client.

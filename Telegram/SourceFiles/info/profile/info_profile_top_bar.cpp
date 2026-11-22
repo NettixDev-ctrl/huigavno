@@ -66,6 +66,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "main/main_session.h"
 #include "menu/menu_mute.h"
 #include "mokagram/settings/mokagram_settings_box.h"
+#include "mokagram/ui/mokagram_box_parts.h"
 #include "settings/settings_credits_graphics.h"
 #include "settings/sections/settings_information.h"
 #include "settings/sections/settings_premium.h"
@@ -1970,7 +1971,10 @@ void TopBar::paintEdges(
 
 void TopBar::paintEdges(QPainter &p, const QRect &clip) const {
 	if (!_solidBg) {
-		paintEdges(p, clip, st::boxDividerBg);
+		// Mokagram: use the card surface for the default personal preview.
+		paintEdges(p, clip, (_source == Source::Preview && _peer->isSelf())
+			? st::windowBg
+			: st::boxDividerBg);
 	} else {
 		paintEdges(p, clip, *_solidBg);
 	}
@@ -2941,8 +2945,13 @@ void TopBar::paintEvent(QPaintEvent *e) {
 	auto p = QPainter(this);
 	{
 		// Mokagram: в боковой панели скруглён только низ шапки.
-		const auto radius = style::ConvertScale(32);
-		const auto top = (_wrap.current() == Wrap::Side) ? -radius : 0;
+		const auto personalPreview = (_source == Source::Preview)
+			&& _peer->isSelf();
+		const auto radius = style::ConvertScale(
+			personalPreview ? Mokagram::BoxParts::kCardRadius : 32);
+		const auto top = (_wrap.current() == Wrap::Side && !personalPreview)
+			? -radius
+			: 0;
 		auto path = QPainterPath();
 		path.addRoundedRect(
 			QRectF(rect()).adjusted(0, top, 0, 0), radius, radius);

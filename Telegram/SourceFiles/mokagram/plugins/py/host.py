@@ -278,8 +278,13 @@ def _data_root():
     return os.path.dirname(_folder.rstrip('/'))
 
 
-def _grants_path():
-    return os.path.join(_data_root(), 'plugin_grants.json')
+def _metadata_path(name, *, read=False):
+    root = _data_root()
+    state_dir = os.path.join(root, 'plugin_state')
+    path = os.path.join(state_dir, name)
+    if os.path.isdir(state_dir) and (not read or os.path.lexists(path)):
+        return path
+    return os.path.join(root, name)
 
 
 def _data_dir(pid):
@@ -289,7 +294,7 @@ def _data_dir(pid):
 
 def _load_grants():
     try:
-        with open(_grants_path(), encoding='utf8') as f:
+        with open(_metadata_path('plugin_grants.json', read=True), encoding='utf8') as f:
             data = json.load(f)
         if isinstance(data, dict):
             _grants.update(data)
@@ -299,11 +304,12 @@ def _load_grants():
 
 def _save_grants():
     try:
-        os.makedirs(_data_root(), exist_ok=True)
-        tmp = _grants_path() + '.tmp'
+        path = _metadata_path('plugin_grants.json')
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = path + '.tmp'
         with open(tmp, 'w', encoding='utf8') as f:
             json.dump(_grants, f, ensure_ascii=False, indent=1, sort_keys=True)
-        os.replace(tmp, _grants_path())
+        os.replace(tmp, path)
     except Exception as e:
         _say('не удалось сохранить права плагинов: %s' % e)
 
@@ -420,13 +426,9 @@ _pinned = set()
 _engine = True       # общий выключатель системы плагинов
 
 
-def _state_path():
-    return os.path.join(os.path.dirname(_folder.rstrip('/')), 'plugins_state.json')
-
-
 def _load_state():
     try:
-        with open(_state_path(), encoding='utf8') as f:
+        with open(_metadata_path('plugins_state.json', read=True), encoding='utf8') as f:
             data = json.load(f)
         _disabled.update(data.get('disabled', []))
         _pinned.update(data.get('pinned', []))
@@ -438,7 +440,7 @@ def _load_state():
 
 def _save_state():
     try:
-        with open(_state_path(), 'w', encoding='utf8') as f:
+        with open(_metadata_path('plugins_state.json'), 'w', encoding='utf8') as f:
             json.dump({'disabled': sorted(_disabled), 'engine': _engine, 'pinned': sorted(_pinned)}, f, ensure_ascii=False)
     except Exception as e:
         _say('не удалось сохранить состояние плагинов: %s' % e)

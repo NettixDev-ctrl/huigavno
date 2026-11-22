@@ -884,14 +884,14 @@ def _fw_secret_file():
 
 def _fw_secret_key():
     import secrets as _s
-    path = os.path.join(_data_root(), 'secrets.key')   # внутри песочницы ~/.config не виден
     try:
-        with open(path, 'rb') as f:
+        with open(_metadata_path('secrets.key', read=True), 'rb') as f:
             key = f.read()
         if len(key) == 32:
             return key
     except OSError:
         pass
+    path = _metadata_path('secrets.key')
     os.makedirs(os.path.dirname(path), exist_ok=True)
     key = _s.token_bytes(32)
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)

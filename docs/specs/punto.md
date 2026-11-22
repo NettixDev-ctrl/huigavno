@@ -13,3 +13,9 @@
 - Convert matching keys in both directions, including uppercase letters and punctuation. Keep spaces, line breaks, digits, and emoji.
 - Keep supported formatting and its offsets in the corrected reply.
 - Show a local notice if there is no reply, the target is unavailable, or the target has no text. The command text stays out of the chat.
+
+## Linux installation
+
+- Installing a local plugin works when Mokagram uses its default data directory as the client working directory.
+- The plugin host can read plugin files and keep approvals and enabled settings across restarts. The sandbox keeps the client session directory and other client files private.
+- Existing plugin approvals, enabled settings, and encryption keys remain available where the host needs separate storage.

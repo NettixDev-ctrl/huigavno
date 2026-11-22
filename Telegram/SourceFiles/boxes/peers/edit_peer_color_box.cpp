@@ -2525,10 +2525,15 @@ void EditPeerColorBox(
 	const auto profile = profileWrap->entity();
 
 	const auto showName = [=] {
+		if (nameWrap->toggled()) {
+			return;
+		}
 		nameWrap->toggle(true, anim::type::instant);
 		profileWrap->toggle(false, anim::type::instant);
 		profileButton->hide();
 		nameButton->show();
+		// Mokagram: show the preview when switching from a scrolled tab.
+		box->scrollToY(0);
 	};
 
 	const auto switchTab = CreateTabsWidget(
@@ -2539,10 +2544,14 @@ void EditPeerColorBox(
 		},
 		{
 			[=] {
+				if (profileWrap->toggled()) {
+					return;
+				}
 				nameWrap->toggle(false, anim::type::instant);
 				profileWrap->toggle(true, anim::type::instant);
 				nameButton->hide();
 				profileButton->show();
+				box->scrollToY(0);
 			},
 			showName,
 		});

@@ -12,7 +12,12 @@ endif()
 
 set(tinyasr_source ${CMAKE_CURRENT_LIST_DIR}/../ThirdParty/tinyasr)
 set(tinyasr_build ${CMAKE_CURRENT_BINARY_DIR}/tinyasr)
-set(tinyasr_archive ${tinyasr_build}/release/libtinyasr.a)
+if (WIN32)
+    # Mokagram: cargo выдаёт staticlib в COFF-формате с расширением .lib.
+    set(tinyasr_archive ${tinyasr_build}/release/tinyasr.lib)
+else()
+    set(tinyasr_archive ${tinyasr_build}/release/libtinyasr.a)
+endif()
 
 add_custom_command(
 OUTPUT ${tinyasr_archive}

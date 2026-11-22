@@ -22,6 +22,7 @@ struct Track {
 	QString id;
 	QString title;
 	QString artist;
+	QString videoId;         // ролик YouTube Music, если трек оттуда
 	QString artworkUrl;      // 100x100, для крупной заменить на t500x500
 	QString permalink;
 	QString transcodingUrl;  // выбранный вариант потока (progressive mp3 или hls)

@@ -23,6 +23,8 @@
 #include <QtNetwork/QNetworkAccessManager>
 #include <QtNetwork/QNetworkReply>
 
+#include <algorithm>
+
 namespace Mokagram::Music {
 namespace {
 
@@ -194,6 +196,144 @@ void FindSong(const QJsonValue &value, const QString &title, const QString &arti
 	if (delta < best.delta) best = { id, delta };
 }
 
+[[nodiscard]] QString RowVideoId(const QJsonObject &row) {
+	static const auto valid = QRegularExpression(u"^[A-Za-z0-9_-]{11}$"_q);
+	auto id = row.value("playlistItemData").toObject()
+		.value("videoId").toString();
+	if (!valid.match(id).hasMatch()) {
+		id = row.value("navigationEndpoint").toObject()
+			.value("watchEndpoint").toObject()
+			.value("videoId").toString();
+	}
+	return valid.match(id).hasMatch() ? id : QString();
+}
+
+[[nodiscard]] QString RowThumbnail(const QJsonObject &row) {
+	const auto list = row.value("thumbnail").toObject()
+		.value("musicThumbnailRenderer").toObject()
+		.value("thumbnail").toObject()
+		.value("thumbnails").toArray();
+	auto result = QString();
+	auto bestWidth = -1;
+	for (const auto &value : list) {
+		const auto thumb = value.toObject();
+		const auto url = thumb.value("url").toString();
+		const auto width = thumb.value("width").toInt();
+		if (!url.isEmpty() && width >= bestWidth) {
+			bestWidth = width;
+			result = url;
+		}
+	}
+	return result;
+}
+
+void CollectArtistSongs(
+		const QJsonValue &value,
+		const QString &artist,
+		int limit,
+		std::vector<Track> &result) {
+	if (int(result.size()) >= limit) {
+		return;
+	} else if (value.isArray()) {
+		for (const auto &child : value.toArray()) {
+			CollectArtistSongs(child, artist, limit, result);
+			if (int(result.size()) >= limit) {
+				return;
+			}
+		}
+		return;
+	}
+	const auto object = value.toObject();
+	const auto row = object.value("musicResponsiveListItemRenderer").toObject();
+	if (row.isEmpty()) {
+		for (auto i = object.constBegin(); i != object.constEnd(); ++i) {
+			CollectArtistSongs(i.value(), artist, limit, result);
+			if (int(result.size()) >= limit) {
+				return;
+			}
+		}
+		return;
+	}
+	const auto id = RowVideoId(row);
+	if (id.isEmpty()) {
+		return;
+	}
+	const auto type = VideoType(row);
+	if (!type.isEmpty() && type != u"MUSIC_VIDEO_TYPE_ATV"_q) {
+		return;
+	}
+	const auto columns = row.value("flexColumns").toArray();
+	if (columns.size() < 2) {
+		return;
+	}
+	const auto runs = [&](int index) {
+		return columns.at(index).toObject()
+			.value("musicResponsiveListItemFlexColumnRenderer")
+			.toObject().value("text").toObject().value("runs").toArray();
+	};
+	auto title = QString();
+	for (const auto &entry : runs(0)) {
+		const auto run = entry.toObject();
+		const auto runType = VideoType(run);
+		if (!runType.isEmpty() && runType != u"MUSIC_VIDEO_TYPE_ATV"_q) {
+			return;
+		}
+		title += run.value("text").toString();
+	}
+	if (MatchText(title).isEmpty()) {
+		return;
+	}
+	auto credits = QStringList();
+	auto firstCredit = QString();
+	auto duration = 0;
+	for (const auto &entry : runs(1)) {
+		const auto run = entry.toObject();
+		const auto text = run.value("text").toString().trimmed();
+		const auto channel = run.value("navigationEndpoint").toObject()
+			.value("browseEndpoint").toObject().value("browseId").toString();
+		if (channel.startsWith(u"UC"_q)) {
+			credits.push_back(text);
+		}
+		if (const auto length = ReadSeconds(text)) {
+			duration = length;
+		} else if (firstCredit.isEmpty()
+			&& text != u"Song"_q
+			&& !MatchText(text).isEmpty()) {
+			firstCredit = text;
+		}
+	}
+	const auto artistKey = MatchText(artist);
+	auto matched = std::any_of(credits.begin(), credits.end(), [&](const QString &credit) {
+		return MatchText(credit) == artistKey;
+	});
+	if (!matched && credits.isEmpty()) {
+		matched = (MatchText(firstCredit) == artistKey);
+	}
+	if (!matched) {
+		return;
+	}
+	const auto known = std::any_of(result.begin(), result.end(), [&](const Track &track) {
+		return track.videoId == id;
+	});
+	if (known) {
+		return;
+	}
+	auto track = Track();
+	track.id = u"yt:"_q + id;
+	track.videoId = id;
+	track.title = title.trimmed();
+	track.artist = credits.empty() ? firstCredit : credits.join(u", "_q);
+	track.artworkUrl = RowThumbnail(row);
+	if (track.artworkUrl.isEmpty()) {
+		track.artworkUrl = u"https://i.ytimg.com/vi/"_q + id + u"/hqdefault.jpg"_q;
+	}
+	track.permalink = QString::fromLatin1(kOrigin) + u"/watch?v="_q + id;
+	track.durationMs = duration * 1000;
+	track.uploaderName = artist;
+	track.unavailable = true;
+	result.push_back(std::move(track));
+}
+
 void SearchSong(const Track &track, Fn<void(QString)> done) {
 	LoadCatalogConfig([=](CatalogConfig config) {
 		if (config.key.isEmpty()) {
@@ -215,6 +355,42 @@ void SearchSong(const Track &track, Fn<void(QString)> done) {
 			auto match = Match();
 			FindSong(contents, MatchText(track.title), MatchText(track.artist), track.durationMs / 1000, match);
 			done(match.id);
+		});
+	});
+}
+
+void LoadArtistTracksImpl(
+		const QString &artist,
+		int limit,
+		Fn<void(std::vector<Track>)> done) {
+	const auto name = artist.trimmed();
+	if (name.isEmpty() || limit <= 0) {
+		done({});
+		return;
+	}
+	LoadCatalogConfig([=](CatalogConfig config) {
+		if (config.key.isEmpty()) {
+			done({});
+			return;
+		}
+		auto url = QUrl(QString::fromLatin1(kOrigin) + u"/youtubei/v1/search"_q);
+		auto query = QUrlQuery();
+		query.addQueryItem(u"alt"_q, u"json"_q);
+		query.addQueryItem(u"key"_q, config.key);
+		url.setQuery(query);
+		CatalogRequest(url, QJsonObject{
+			{ "context", QJsonObject{ { "client", config.client } } },
+			{ "query", name },
+			{ "params", QString::fromLatin1(kSongFilter) },
+		}, [=](QByteArray data) {
+			if (data.isEmpty()) Config() = {};
+			auto result = std::vector<Track>();
+			CollectArtistSongs(
+				QJsonDocument::fromJson(data).object().value("contents"),
+				name,
+				limit,
+				result);
+			done(std::move(result));
 		});
 	});
 }
@@ -304,8 +480,17 @@ void DownloadSong(const QString &tool, const QString &id, const QString &cachePr
 
 } // namespace
 
+void LoadArtistTracks(
+		const QString &artist,
+		int limit,
+		Fn<void(std::vector<Track>)> done) {
+	LoadArtistTracksImpl(artist, limit, std::move(done));
+}
+
 bool HasYouTubeMusicMetadata(const Track &track) {
-	return track.id.toULongLong() && !MatchText(track.title).isEmpty() && !MatchText(track.artist).isEmpty();
+	return (track.id.toULongLong() || !track.videoId.isEmpty())
+		&& !MatchText(track.title).isEmpty()
+		&& !MatchText(track.artist).isEmpty();
 }
 
 void DownloadYouTubeMusic(const Track &track, AudioFileDone done) {
@@ -313,12 +498,19 @@ void DownloadYouTubeMusic(const Track &track, AudioFileDone done) {
 		done({}, DownloadError());
 		return;
 	}
-	const auto id = QString::number(track.id.toULongLong());
-	const auto prefix = CacheDir() + u"/yt-"_q + id + u'.';
+	const auto known = !track.videoId.isEmpty();
+	const auto key = known
+		? track.videoId
+		: QString::number(track.id.toULongLong());
+	const auto prefix = (known ? u"/yt-v-"_q : u"/yt-"_q) + key + u'.';
 	LoadCachedAudio(prefix, CachedAudio(prefix), [=](AudioFileDone finish) {
 		const auto tool = FindTool(u"yt-dlp"_q);
 		if (tool.isEmpty()) {
 			finish({}, QString::fromUtf8(Lang::Tr("Для воспроизведения из YouTube Music установите yt-dlp")));
+			return;
+		}
+		if (known) {
+			DownloadSong(tool, track.videoId, prefix, finish);
 			return;
 		}
 		SearchSong(track, [=](QString videoId) {

@@ -98,6 +98,7 @@ struct Library {
 	o.insert("id", t.id);
 	o.insert("title", t.title);
 	o.insert("artist", t.artist);
+	o.insert("videoId", t.videoId);
 	o.insert("uploaderName", t.uploaderName);
 	o.insert("art", t.artworkUrl);
 	o.insert("link", t.permalink);
@@ -118,14 +119,20 @@ struct Library {
 [[nodiscard]] Track FromJson(const QJsonObject &o) {
 	auto t = Track();
 	t.id = o.value("id").toString();
-	// id из файла может быть мусором: оставляем только числа и telegram-треки.
+	// id из файла может быть мусором: оставляем только числа,
+	// telegram-треки и ролики YouTube Music.
 	const auto numeric = t.id.toULongLong();
-	if (!t.id.startsWith(u"telegram:"_q)
+	const auto youtube = t.id.startsWith(u"yt:"_q);
+	if (!t.id.startsWith(u"telegram:"_q) && !youtube
 		&& (numeric == 0 || QString::number(numeric) != t.id)) {
 		t.id = QString();
 	}
 	t.title = o.value("title").toString();
 	t.artist = o.value("artist").toString();
+	t.videoId = o.value("videoId").toString();
+	if (t.videoId.isEmpty() && youtube) {
+		t.videoId = t.id.mid(3);
+	}
 	t.uploaderName = o.value("uploaderName").toString();
 	t.artworkUrl = o.value("art").toString();
 	t.permalink = o.value("link").toString();
@@ -1409,9 +1416,10 @@ void SetLiked(const Track &track, bool liked) {
 	}
 	if (Music::Account::IsLoggedIn()) {
 		// Постановка лайка в аккаунт идёт фоном: сердечко отвечает мгновенно.
-		if (!IsTelegramId(track.id)) {
+		// Треки YouTube Music живут только локально: публичного id SoundCloud у них нет.
+		if (track.id.toULongLong()) {
 			Music::Account::SetTrackLiked(track.id, liked);
-		} else if (!track.title.trimmed().isEmpty()) {
+		} else if (IsTelegramId(track.id) && !track.title.trimmed().isEmpty()) {
 			const auto userId = Music::Account::User().id;
 			Search(track.title, 0, [=](SearchResult result) {
 				if (!result.error.isEmpty()

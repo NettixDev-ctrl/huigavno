@@ -1031,15 +1031,19 @@ void PrefetchUpcoming() {
 		; left > 0 && i < int(queue.tracks.size())
 		; ++i) {
 		const auto &track = queue.tracks[i];
-		if (!CanPlayTrack(track) || IsTelegramTrack(track) || !track.id.toULongLong()) {
+		if (!CanPlayTrack(track) || IsTelegramTrack(track)) {
 			continue;
 		}
-		--left;
 		if (track.unavailable) {
 			// Феллбек из YouTube Music кэшируется так же, как треки SoundCloud.
 			DownloadYouTubeMusic(track, [](const QString &, const QString &) {});
+			--left;
 			continue;
 		}
+		if (!track.id.toULongLong()) {
+			continue;
+		}
+		--left;
 		ResolveThen(track, [=](Track next, QString error) {
 			if (error.isEmpty() && token == QueueState().pendingToken) {
 				Download(next, [](const QString &, const QString &) {});
@@ -3562,6 +3566,44 @@ private:
 			|| (!artistName.isEmpty()
 				&& candidate.artist.trimmed().compare(artistName, Qt::CaseInsensitive) == 0);
 	});
+	return result;
+}
+
+[[nodiscard]] bool SameHomeTrack(const Track &a, const Track &b) {
+	if (!a.id.isEmpty() && a.id == b.id) {
+		return true;
+	}
+	const auto normalize = [](QString text) {
+		return text.simplified().toCaseFolded();
+	};
+	if (normalize(a.title) != normalize(b.title)) {
+		return false;
+	}
+	if (a.durationMs > 0 && b.durationMs > 0
+		&& std::abs(a.durationMs - b.durationMs) > 5000) {
+		return false;
+	}
+	const auto names = TrackArtistNames(b);
+	return std::ranges::any_of(TrackArtistNames(a), [&](const QString &credit) {
+		return std::ranges::any_of(names, [&](const QString &other) {
+			return normalize(credit) == normalize(other);
+		});
+	});
+}
+
+// Популярное: треки SoundCloud, а если их не нашлось, дополняем из YouTube Music.
+[[nodiscard]] std::vector<Track> HomeArtistPopular(
+		const std::vector<Track> &tracks,
+		const std::vector<Track> &youtube) {
+	auto result = tracks;
+	for (const auto &track : youtube) {
+		const auto known = std::ranges::any_of(result, [&](const Track &other) {
+			return SameHomeTrack(track, other);
+		});
+		if (!known) {
+			result.push_back(track);
+		}
+	}
 	return result;
 }
 
@@ -8310,9 +8352,25 @@ protected:
 			int generation) {
 		_homeArtistAlbums.clear();
 		_homeArtistTracks.clear();
+		_homeArtistYouTubeTracks.clear();
 		if (_homeArtistOpen && !_homeArtistSeed.id.isEmpty()) {
 			_homeArtistTracks.push_back(_homeArtistSeed);
 		}
+		const auto loadYouTube = [=] {
+			if (!_homeArtistOpen || name.isEmpty()) {
+				return;
+			}
+			// SoundCloud ничего не дал: популярное добираем из YouTube Music.
+			LoadArtistTracks(name, 12, crl::guard(this, [=](std::vector<Track> found) {
+				if (generation != _homeAlbumGeneration || !_homeArtistOpen) {
+					return;
+				}
+				_homeArtistYouTubeTracks = std::move(found);
+				if (_tab == Tab::Home && _homeAlbumOpen) {
+					rebuildTab();
+				}
+			}));
+		};
 		if (!name.isEmpty()) {
 			SearchAlbums(name, 20, crl::guard(this, [=](std::vector<Album> albums, QString error) {
 				if (generation != _homeAlbumGeneration) {
@@ -8345,6 +8403,9 @@ protected:
 							return credit.compare(name, Qt::CaseInsensitive) == 0;
 						}));
 				});
+				if (_homeArtistOpen && tracks.empty()) {
+					loadYouTube();
+				}
 				if (_homeArtistOpen) {
 					if (tracks.empty() && !_homeArtistSeed.id.isEmpty()) {
 						tracks.push_back(_homeArtistSeed);
@@ -8358,6 +8419,8 @@ protected:
 					rebuildTab();
 				}
 			}));
+		} else {
+			loadYouTube();
 		}
 	}
 
@@ -8373,6 +8436,9 @@ protected:
 		for (const auto &track : _homeArtistTracks) {
 			avoid.push_back(track);
 		}
+		for (const auto &track : _homeArtistYouTubeTracks) {
+			avoid.push_back(track);
+		}
 		BuildSimilar(seed, avoid, 24, crl::guard(this, [=](std::vector<Track> tracks, QString) {
 			if (generation != _homeAlbumGeneration) {
 				return;
@@ -8384,7 +8450,7 @@ protected:
 	}
 
 	void playHomeArtist() {
-		auto results = _homeArtistTracks;
+		auto results = HomeArtistPopular(_homeArtistTracks, _homeArtistYouTubeTracks);
 		std::erase_if(results, [](const Track &track) {
 			return !CanPlayTrack(track);
 		});
@@ -8418,7 +8484,9 @@ protected:
 		_homeArtistBarPlay->setFullWidth(std::min(s(144), std::max(width - s(44), 0) / 2));
 		_homeArtistBarPlay->moveToRight(
 			s(22), (height - _homeArtistBarPlay->height()) / 2);
-		_homeArtistBarPlay->setDisabled(std::ranges::none_of(_homeArtistTracks, CanPlayTrack));
+		_homeArtistBarPlay->setDisabled(std::ranges::none_of(
+			HomeArtistPopular(_homeArtistTracks, _homeArtistYouTubeTracks),
+			CanPlayTrack));
 		_homeArtistBar->raise();
 		_homeArtistBar->update();
 	}
@@ -8755,13 +8823,18 @@ protected:
 					})), QMargins(0, 0, 0, style::ConvertScale(8)));
 				_homeAlbumHeader = albumHeader;
 				albumHeader->setBannerTopInset(_tabScroll->y());
-				albumHeader->setArtistPlayable(std::ranges::any_of(_homeArtistTracks, CanPlayTrack));
+				albumHeader->setArtistPlayable(std::ranges::any_of(
+					HomeArtistPopular(_homeArtistTracks, _homeArtistYouTubeTracks),
+					CanPlayTrack));
 				if (!_homeAlbumIsTrack && !_homeArtistOpen) InstallAlbumContextMenu(albumHeader, _controller, _homeAlbum);
 
 				if (_homeArtistOpen) {
-					if (!_homeArtistTracks.empty()) {
+					const auto popular = HomeArtistPopular(
+						_homeArtistTracks,
+						_homeArtistYouTubeTracks);
+					if (!popular.empty()) {
 						_tabList->add(object_ptr<Ui::FlatLabel>(_tabList, tr("Популярное"), st::boxLabel), QMargins(20, 8, 20, 4));
-						addRows(_homeArtistTracks, RowMode::Album);
+						addRows(popular, RowMode::Album);
 					}
 					auto artistLikes = std::vector<Track>();
 					const auto &artistId = _homeArtistProfile.id;
@@ -10151,6 +10224,7 @@ private:
 	std::set<QString> _homeAlbumIds;
 	std::vector<Track> _homeAlbumTracks;
 	std::vector<Track> _homeArtistTracks;
+	std::vector<Track> _homeArtistYouTubeTracks;
 	std::vector<Album> _homeArtistAlbums;
 	QString _homeArtistBannerUrl;
 	DiscographyFilter _discographyFilter = DiscographyFilter::All;

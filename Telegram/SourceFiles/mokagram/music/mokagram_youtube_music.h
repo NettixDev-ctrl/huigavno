@@ -7,11 +7,20 @@
 
 #include <QtCore/QString>
 
+#include <vector>
+
 namespace Mokagram::Music {
 
 struct Track;
 
 [[nodiscard]] bool HasYouTubeMusicMetadata(const Track &track);
+
+// Популярные песни исполнителя из каталога YouTube Music. Возвращает
+// неиграемые напрямую Track с videoId: плеер скачивает их через yt-dlp.
+void LoadArtistTracks(
+	const QString &artist,
+	int limit,
+	Fn<void(std::vector<Track>)> done);
 
 // Запускается в главном потоке. Возвращает путь к аудио в кэше.
 // Скачанный файл живёт в общем LRU кэше аудио, повторные запросы объединяются.

@@ -13,6 +13,7 @@
 
 #include "mokagram/music/mokagram_soundcloud.h"
 #include "mokagram/music/mokagram_soundcloud_login.h"
+#include "mokagram/music/mokagram_youtube_music.h"
 #include "mokagram/music/mokagram_music_canvas.h"
 #include "mokagram/music/mokagram_music_library.h"
 #include "mokagram/music/mokagram_lyrics.h"
@@ -273,7 +274,6 @@ struct Queue {
 	QString forYouNote;
 	int tab = 0;                     // 0 поиск, 1 лайкнутые, 2 для вас
 	Track current;                   // играющий трек (с разобранными ссылками)
-	DocumentId fallbackDocumentId = 0;
 	bool recorded = true;            // прослушивание уже записано в историю
 	QString lastQuery;
 	bool custom = false;             // очередь собрана вручную
@@ -303,26 +303,8 @@ Queue &QueueState() {
 	return track.id.startsWith(u"telegram:"_q);
 }
 
-[[nodiscard]] QString YouTubeMusicQuery(const Track &track) {
-	const auto artist = track.artist.simplified();
-	const auto title = track.title.simplified();
-	if (!track.id.toULongLong() || artist.isEmpty() || title.isEmpty()) {
-		return {};
-	}
-	const auto query = u"moka:music:v1:%1\n%2\n%3"_q
-		.arg(std::max(track.durationMs / 1000, 0)).arg(artist, title);
-	return (query.size() <= 256) ? query : QString();
-}
-
 [[nodiscard]] bool CanPlayTrack(const Track &track) {
-	return !track.unavailable || !YouTubeMusicQuery(track).isEmpty();
-}
-
-[[nodiscard]] bool IsYouTubeMusicPlayback(const AudioMsgId &id) {
-	const auto &queue = QueueState();
-	return id.audio() && !id.contextId()
-		&& id.audio()->id == queue.fallbackDocumentId
-		&& &id.audio()->session() == queue.session.get();
+	return !track.unavailable || HasYouTubeMusicMetadata(track);
 }
 
 [[nodiscard]] HistoryItem *TrackMessage(const Track &track) {
@@ -354,7 +336,6 @@ void BindController(not_null<Window::SessionController*> controller) {
 		queue.results.clear();
 		queue.searchResults.clear();
 		queue.current = {};
-		queue.fallbackDocumentId = 0;
 		queue.currentId.clear();
 		queue.lastQuery.clear();
 		queue.index = -1;
@@ -625,7 +606,9 @@ void LoadLocalArtwork(const Track &track, Fn<void(QImage)> done) {
 		QByteArray(),
 		base::unixtime::now(),
 		attributes,
-		extension == u"mp3"_q ? u"audio/mpeg"_q : u"audio/mp4"_q,
+		extension == u"mp3"_q
+			? u"audio/mpeg"_q
+			: (extension == u"webm"_q ? u"audio/webm"_q : u"audio/mp4"_q),
 		InlineImageLocation(),
 		ImageWithLocation(),
 		ImageWithLocation(),
@@ -640,84 +623,6 @@ void PlayIndex(int index, bool skipUnavailable = false);
 void RefillStream();
 void Subscribe();
 void PrefetchUpcoming();
-
-void RequestYouTubeMusic(
-		not_null<Main::Session*> session,
-		not_null<UserData*> bot,
-		const QString &query,
-		int retries,
-		Fn<bool()> valid,
-		Fn<void(DocumentData*)> done) {
-	session->api().request(MTPmessages_GetInlineBotResults(
-		MTP_flags(0),
-		bot->inputUser(),
-		MTP_inputPeerSelf(),
-		MTPInputGeoPoint(),
-		MTP_string(query),
-		MTP_string()
-	)).done([=](const MTPmessages_BotResults &result) {
-		if (!valid()) return;
-		if (result.type() == mtpc_messages_botResults) {
-			for (const auto &item : result.c_messages_botResults().vresults().v) {
-				if (item.type() == mtpc_botInlineMediaResult) {
-					const auto &media = item.c_botInlineMediaResult();
-					if (const auto file = media.vdocument(); file
-						&& qs(media.vid()).startsWith(u"ready:"_q)) {
-						const auto document = session->data().processDocument(*file);
-						if (document->isSong()) {
-							done(document);
-							return;
-						}
-					}
-				} else if (retries > 0 && item.type() == mtpc_botInlineResult
-					&& qs(item.c_botInlineResult().vid()) == u"moka:music:pending"_q) {
-					QTimer::singleShot(2000, [=] {
-						if (valid()) {
-							RequestYouTubeMusic(session, bot, query, retries - 1, valid, done);
-						}
-					});
-					return;
-				}
-			}
-		}
-		done(nullptr);
-	}).fail([=] {
-		if (valid()) done(nullptr);
-	}).send();
-}
-
-void LoadYouTubeMusic(
-		not_null<Main::Session*> session,
-		const QString &query,
-		Fn<bool()> valid,
-		Fn<void(DocumentData*)> done) {
-	const auto username = u"saveinator_bot"_q;
-	const auto ask = [=](UserData *bot) {
-		if (!valid()) return;
-		if (!bot || !bot->isBot()) {
-			done(nullptr);
-			return;
-		}
-		RequestYouTubeMusic(session, bot, query, 20, valid, done);
-	};
-	if (const auto peer = session->data().peerByUsername(username)) {
-		ask(peer->asUser());
-		return;
-	}
-	session->api().request(MTPcontacts_ResolveUsername(
-		MTP_flags(0),
-		MTP_string(username),
-		MTP_string()
-	)).done([=](const MTPcontacts_ResolvedPeer &result) {
-		if (!valid()) return;
-		const auto &data = result.c_contacts_resolvedPeer();
-		session->data().processUsers(data.vusers());
-		const auto peer = session->data().peerLoaded(peerFromMTP(data.vpeer()));
-		ask(peer ? peer->asUser() : nullptr);
-	}).fail([=] {
-		if (valid()) done(nullptr);
-	}).send();
-}
 
 void ResolveThen(const Track &track, Fn<void(Track, QString)> done) {
 	if (!track.transcodingUrl.isEmpty()) {
@@ -914,7 +819,6 @@ void CommitRadio(
 		PlayIndex(0);
 	} else if (!keepPlaying) {
 		queue.current = seed;
-		queue.fallbackDocumentId = 0;
 		queue.recorded = false;
 		const auto document = MakeDocument(&controller->session(), seed, path);
 		LoadImage(ArtUrl(seed.artworkUrl, u"t500x500"_q), [id = document->id](QImage image) {
@@ -1239,7 +1143,6 @@ void PlayIndex(int index, bool skipUnavailable) {
 			return;
 		}
 		queue.current = track;
-		queue.fallbackDocumentId = 0;
 		queue.recorded = true;
 		Media::Player::instance()->play(
 			AudioMsgId(document, item->fullId()),
@@ -1254,7 +1157,6 @@ void PlayIndex(int index, bool skipUnavailable) {
 			QueueState().changes.fire({});
 		});
 		queue.current = resolved;
-		queue.fallbackDocumentId = resolved.unavailable ? document->id : 0;
 		queue.recorded = false;
 		Media::Player::instance()->play(AudioMsgId(document, FullMsgId()), std::nullopt);
 		RecordRecentTrack(resolved);
@@ -1265,8 +1167,6 @@ void PlayIndex(int index, bool skipUnavailable) {
 		PrefetchUpcoming();
 	};
 	if (track.unavailable) {
-		const auto query = YouTubeMusicQuery(track);
-		if (query.isEmpty()) return;
 		const auto playback = Media::Player::instance()->current(AudioMsgId::Type::Song);
 		const auto valid = [=] {
 			const auto &queue = QueueState();
@@ -1278,15 +1178,20 @@ void PlayIndex(int index, bool skipUnavailable) {
 		if (!skipUnavailable) {
 			controller->showToast(QString::fromUtf8(Lang::Tr("Загружаю: ")) + track.title);
 		}
-		LoadYouTubeMusic(&controller->session(), query, valid, [=](DocumentData *document) {
+		DownloadYouTubeMusic(track, [=](QString path, bool missingDownloader) {
+			if (!valid()) return;
 			auto &queue = QueueState();
-			if (document) {
-				playDocument(document, track);
+			const auto controller = queue.controller.get();
+			if (!path.isEmpty()) {
+				playDocument(MakeDocument(&controller->session(), track, path), track);
 			} else if (skipUnavailable && queue.index + 1 < int(queue.tracks.size())) {
-				PlayIndex(queue.index + 1, true);
-			} else if (const auto controller = queue.controller.get()) {
-				controller->showToast(QString::fromUtf8(Lang::Tr(
-					"Не удалось воспроизвести трек из YouTube Music")));
+				crl::on_main(controller, [=] {
+					if (valid()) PlayIndex(QueueState().index + 1, true);
+				});
+			} else {
+				controller->showToast(QString::fromUtf8(Lang::Tr(missingDownloader
+					? "Для воспроизведения из YouTube Music установите yt-dlp"
+					: "Не удалось воспроизвести трек из YouTube Music")));
 			}
 		});
 		return;
@@ -6209,7 +6114,7 @@ Track details::PlayingTrack() {
 	const auto &track = QueueState().current;
 	if (OwnsTrack(current)
 		&& !track.id.isEmpty()
-		&& (IsYouTubeMusicPlayback(current) || document->id == DocumentIdForTrack(track.id))) {
+		&& document->id == DocumentIdForTrack(track.id)) {
 		return track;
 	}
 	if (const auto item = document->session().data().message(current.contextId())) {
@@ -10474,8 +10379,7 @@ QColor CurrentCoverAccent() {
 
 bool OwnsTrack(const AudioMsgId &id) {
 	return id.audio()
-		&& ((id.audio()->id & 0xFFFFFF0000000000ULL) == 0x4D4F4B0000000000ULL
-			|| IsYouTubeMusicPlayback(id));
+		&& (id.audio()->id & 0xFFFFFF0000000000ULL) == 0x4D4F4B0000000000ULL;
 }
 
 bool UsesQueue(const AudioMsgId &id) {
@@ -10485,7 +10389,6 @@ bool UsesQueue(const AudioMsgId &id) {
 		return false;
 	}
 	if (OwnsTrack(id)) {
-		if (IsYouTubeMusicPlayback(id)) return queue.currentId == queue.current.id;
 		return !queue.currentId.startsWith(u"telegram:"_q)
 			&& id.audio()->id == DocumentIdForTrack(queue.currentId);
 	}

@@ -12,6 +12,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "api/api_blocked_peers.h"
 #include "api/api_chat_participants.h"
 #include "api/api_credits.h"
+#include "api/api_peer_colors.h"
 #include "api/api_report.h"
 #include "api/api_statistics.h"
 #include "apiwrap.h"
@@ -26,6 +27,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "mokagram/notes/mokagram_notes.h"
 #include "mokagram/music/mokagram_music_presence.h"
 #include "mokagram/music/mokagram_soundcloud.h"
+#include "mokagram/settings/mokagram_settings_box.h"
 #include "mokagram/ui/mokagram_box_parts.h"
 
 #include <QtGui/QPainterPath>
@@ -53,6 +55,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_channel.h"
 #include "data/data_chat.h"
 #include "data/data_chat_filters.h"
+#include "data/data_emoji_statuses.h"
 #include "data/data_folder.h"
 #include "data/data_forum.h"
 #include "data/data_forum_topic.h"
@@ -92,6 +95,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "support/support_helper.h"
 #include "ui/boxes/peer_qr_box.h"
 #include "ui/boxes/report_box_graphics.h"
+#include "ui/color_contrast.h"
 #include "ui/controls/userpic_button.h"
 #include "ui/effects/credits_graphics.h"
 #include "ui/effects/toggle_arrow.h"
@@ -1353,13 +1357,35 @@ class ListeningCard final : public Ui::AbstractButton {
 public:
 	ListeningCard(
 		QWidget *parent,
-		not_null<Window::SessionController*> controller)
+		not_null<Window::SessionController*> controller,
+		not_null<UserData*> user)
 	: AbstractButton(parent) {
 		setFocusPolicy(Qt::TabFocus);
 		setPointerCursor(true);
 		setClickedCallback([=] {
 			Mokagram::Music::Presence::OpenTrack(controller, _track);
 		});
+		rpl::merge(
+			style::PaletteChanged(),
+			user->session().changes().peerFlagsValue(
+				user,
+				Data::PeerUpdate::Flag::EmojiStatus
+					| Data::PeerUpdate::Flag::ColorProfile) | rpl::to_empty
+		) | rpl::on_next([=] {
+			if (const auto collectible = user->emojiStatusId().collectible) {
+				_profileColor = collectible->edgeColor;
+			} else {
+				const auto colors = user->session().api().peerColors(
+				).colorProfileFor(user);
+				_profileColor = (colors && !colors->bg.empty())
+					? std::make_optional(colors->bg.front())
+					: std::nullopt;
+			}
+			update();
+		}, lifetime());
+		Mokagram::Settings::RowIconsUpdated() | rpl::on_next([=] {
+			update();
+		}, lifetime());
 	}
 
 	void setTrack(Mokagram::Music::Presence::Track track) {
@@ -1403,31 +1429,64 @@ private:
 	}
 
 	int resizeGetHeight(int width) override {
-		return style::ConvertScale(82);
+		return style::ConvertScale(90);
+	}
+
+	void onStateChanged(State, StateChangeSource) override {
+		update();
+	}
+
+	bool eventHook(QEvent *e) override {
+		if (e->type() == QEvent::FocusIn || e->type() == QEvent::FocusOut) {
+			update();
+		}
+		return AbstractButton::eventHook(e);
 	}
 
 	void paintEvent(QPaintEvent *e) override {
 		auto p = Painter(this);
 		auto hq = PainterHighQualityEnabler(p);
-		const auto padding = style::ConvertScale(12);
+		const auto padding = style::ConvertScale(16);
+		const auto gap = style::ConvertScale(12);
 		const auto coverSize = height() - 2 * padding;
 		const auto cover = myrtlrect(padding, padding, coverSize, coverSize);
 		const auto radius = style::ConvertScale(9);
-		if (isOver() || hasFocus()) {
-			p.setPen(Qt::NoPen);
-			p.setBrush(st::windowBgOver);
-			const auto cardRadius = style::ConvertScale(
-				Mokagram::BoxParts::kCardRadius);
-			p.drawRoundedRect(rect(), cardRadius, cardRadius);
+		const auto surface = st::windowBgOver->c;
+		const auto base = _profileColor
+			? Ui::BlendColors(surface, *_profileColor, 0.7)
+			: surface;
+		const auto lightSurface = Ui::CountContrast(base, Qt::black)
+			> Ui::CountContrast(base, Qt::white);
+		const auto background = Ui::BlendColors(
+			base,
+			lightSurface ? Qt::white : Qt::black,
+			isDown() ? 0.16 : isOver() ? 0.08 : 0.);
+		const auto primary = _profileColor
+			? QColor(lightSurface ? Qt::black : Qt::white)
+			: st::windowFg->c;
+		const auto muted = Ui::BlendColors(primary, background, 0.15);
+		const auto secondary = !_profileColor
+			? st::windowSubTextFg->c
+			: Ui::CountContrast(background, muted) >= 4.5
+			? muted
+			: primary;
+		const auto cardRadius = std::min(
+			style::ConvertScale(Mokagram::BoxParts::kCardRadius),
+			std::min(width(), height()) / 2);
+		p.setPen(Qt::NoPen);
+		p.setBrush(background);
+		p.drawRoundedRect(rect(), cardRadius, cardRadius);
+		const auto inset = style::ConvertScale(2);
+		if (hasFocus() && cardRadius > inset) {
+			p.setPen(QPen(primary, style::ConvertScale(1)));
+			p.setBrush(Qt::NoBrush);
+			p.drawRoundedRect(
+				rect().adjusted(inset, inset, -inset, -inset),
+				cardRadius - inset,
+				cardRadius - inset);
 		}
-		if (_cover.isNull()) {
-			p.setPen(Qt::NoPen);
-			p.setBrush(st::windowBgOver);
-			p.drawRoundedRect(cover, radius, radius);
-			p.setFont(st::semiboldFont);
-			p.setPen(st::windowSubTextFg);
-			p.drawText(cover, Qt::AlignCenter, u"♫"_q);
-		} else {
+		const auto hasCover = !_cover.isNull();
+		if (hasCover) {
 			p.save();
 			auto clip = QPainterPath();
 			clip.addRoundedRect(cover, radius, radius);
@@ -1442,31 +1501,62 @@ private:
 			p.restore();
 		}
 
-		const auto left = coverSize + 2 * padding;
-		const auto available = width() - left - padding;
+		const auto left = padding + coverSize + gap;
+		auto available = width() - left - padding;
+		const auto iconSize = style::ConvertScale(20);
+		const auto trailingIcon = hasCover && available > iconSize + 2 * gap;
+		if (!hasCover || trailingIcon) {
+			const auto icon = myrtlrect(
+				trailingIcon ? width() - padding - iconSize
+					: padding + (coverSize - iconSize) / 2,
+				(height() - iconSize) / 2,
+				iconSize,
+				iconSize);
+			if (!_icon) {
+				_icon = Mokagram::Settings::AltIconEmoji(
+					u"🎵"_q, [=] { update(); }, iconSize);
+			}
+			if (_icon && _icon->ready()) {
+				_icon->paint(p, {
+					.textColor = primary,
+					.now = crl::now(),
+					.position = icon.topLeft(),
+					.paused = true,
+				});
+			} else if (!hasCover) {
+				p.setFont(st::semiboldFont);
+				p.setPen(secondary);
+				p.drawText(cover, Qt::AlignCenter, u"♫"_q);
+			}
+			if (trailingIcon) {
+				available -= iconSize + gap;
+			}
+		}
 		if (available <= 0) {
 			return;
 		}
 		const auto title = st::semiboldFont;
 		const auto artist = st::normalFont;
-		const auto gap = style::ConvertScale(4);
+		const auto textGap = style::ConvertScale(4);
 		const auto both = !_track.artist.isEmpty();
 		const auto textHeight = title->height
-			+ (both ? gap + artist->height : 0);
+			+ (both ? textGap + artist->height : 0);
 		const auto top = (height() - textHeight) / 2;
 		p.setFont(title);
-		p.setPen(st::windowFg);
+		p.setPen(primary);
 		p.drawTextLeft(left, top, width(), title->elided(_track.title, available));
 		if (both) {
 			p.setFont(artist);
-			p.setPen(st::windowSubTextFg);
-			p.drawTextLeft(left, top + title->height + gap, width(),
+			p.setPen(secondary);
+			p.drawTextLeft(left, top + title->height + textGap, width(),
 				artist->elided(_track.artist, available));
 		}
 	}
 
 	Mokagram::Music::Presence::Track _track;
 	QImage _cover;
+	std::optional<QColor> _profileColor;
+	std::unique_ptr<Ui::Text::CustomEmoji> _icon;
 };
 
 class DetailsFiller {
@@ -2345,7 +2435,10 @@ Section DetailsFiller::makeInfo() {
 
 Section DetailsFiller::makeListeningCard(not_null<UserData*> user) {
 	const auto parent = _stack->layout();
-	auto result = object_ptr<ListeningCard>(parent, _controller->parentController());
+	auto result = object_ptr<ListeningCard>(
+		parent,
+		_controller->parentController(),
+		user);
 	const auto card = result.data();
 	const auto shown = card->lifetime().make_state<rpl::variable<bool>>(false);
 	Mokagram::Music::Presence::Watch(
@@ -2357,7 +2450,11 @@ Section DetailsFiller::makeListeningCard(not_null<UserData*> user) {
 			*shown = visible;
 		},
 		card->lifetime());
-	return { .widget = std::move(result), .shown = shown->value() };
+	return {
+		.widget = std::move(result),
+		.shown = shown->value(),
+		.bare = true,
+	};
 }
 
 Section DetailsFiller::makePersonalChannel(not_null<UserData*> user) {

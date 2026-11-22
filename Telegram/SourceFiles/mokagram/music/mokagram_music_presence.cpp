@@ -54,6 +54,7 @@ const auto kWriteAck = u"presence-v1"_q;
 struct Activity {
 	Track track;
 	crl::time expiresAt = 0;
+	uint64 request = 0;
 };
 
 [[nodiscard]] Activity Decode(
@@ -149,33 +150,49 @@ void Refresh(const std::shared_ptr<Publisher> &state) {
 
 struct Viewer {
 	base::Timer poll;
-	base::Timer expiry;
-	std::map<uint64, Activity> active;
 	Tracks shown;
 	Fn<void(Tracks)> changed;
 	int generation = 0;
 	int pending = 0;
 };
 
-void Notify(Viewer &state) {
+struct ReadCache {
+	base::Timer expiry;
+	std::map<uint64, Activity> confirmed;
+	rpl::event_stream<> changed;
+	uint64 request = 0;
+};
+
+void Notify(ReadCache &cache) {
 	const auto now = crl::now();
-	std::erase_if(state.active, [&](const auto &entry) {
+	std::erase_if(cache.confirmed, [&](const auto &entry) {
 		return entry.second.expiresAt <= now;
 	});
 	auto next = crl::time(0);
-	auto tracks = Tracks();
-	for (const auto &[id, activity] : state.active) {
-		tracks.emplace(id, activity.track);
+	for (const auto &[id, activity] : cache.confirmed) {
 		next = next ? std::min(next, activity.expiresAt) : activity.expiresAt;
 	}
-	state.expiry.cancel();
+	cache.expiry.cancel();
 	if (next) {
-		state.expiry.callOnce(next - now);
+		cache.expiry.callOnce(next - now);
 	}
-	if (tracks != state.shown) {
-		state.shown = tracks;
-		state.changed(std::move(tracks));
+	cache.changed.fire({});
+}
+
+[[nodiscard]] std::shared_ptr<ReadCache> ReadCacheFor(
+		not_null<Main::Session*> session) {
+	static auto caches = std::map<Main::Session*, std::shared_ptr<ReadCache>>();
+	const auto [i, inserted] = caches.try_emplace(session.get());
+	if (inserted) {
+		const auto cache = i->second = std::make_shared<ReadCache>();
+		cache->expiry.setCallback([weak = std::weak_ptr(cache)] {
+			if (const auto cache = weak.lock()) {
+				Notify(*cache);
+			}
+		});
+		session->lifetime().add([=] { caches.erase(session.get()); });
 	}
+	return i->second;
 }
 
 } // namespace
@@ -246,24 +263,41 @@ void WatchList(
 	const auto state = std::make_shared<Viewer>();
 	state->changed = std::move(changed);
 	const auto weak = std::weak_ptr(state);
-	state->expiry.setCallback([weak] {
-		if (const auto state = weak.lock()) {
-			Notify(*state);
+	const auto cache = ReadCacheFor(session);
+	const auto update = [=] {
+		const auto state = weak.lock();
+		if (!state) {
+			return;
 		}
-	});
+		auto tracks = Tracks();
+		if (view->isVisible() && Settings::Bool(kShowKey)) {
+			const auto now = crl::now();
+			for (const auto id : visible()) {
+				const auto i = cache->confirmed.find(id);
+				if (i != cache->confirmed.end() && i->second.track
+					&& i->second.expiresAt > now) {
+					tracks.emplace(id, i->second.track);
+				}
+			}
+		}
+		if (tracks != state->shown) {
+			state->shown = tracks;
+			state->changed(std::move(tracks));
+		}
+	};
 	const auto refresh = [=] {
 		const auto state = weak.lock();
-		if (!state || state->pending || !view->isVisible()
+		if (!state || !view->isVisible()
 			|| !Settings::Bool(kShowKey)) {
+			return;
+		}
+		update();
+		if (state->pending) {
 			return;
 		}
 		auto ids = visible();
 		std::sort(ids.begin(), ids.end());
 		ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
-		std::erase_if(state->active, [&](const auto &entry) {
-			return !std::binary_search(ids.begin(), ids.end(), entry.first);
-		});
-		Notify(*state);
 		const auto generation = state->generation;
 		for (auto first = ids.cbegin(); first != ids.cend();) {
 			const auto end = first + std::min<ptrdiff_t>(
@@ -276,6 +310,7 @@ void WatchList(
 			}
 			++state->pending;
 			const auto sentAt = crl::now();
+			const auto request = ++cache->request;
 			Bot::Ask(
 				session,
 				u"presence:v1:list:"_q + portions.join(u','),
@@ -295,15 +330,19 @@ void WatchList(
 						if (!std::binary_search(batch.begin(), batch.end(), id)) {
 							continue;
 						}
-						// An empty batch can also mean the bot could not answer.
-						if (result.description == u"0"_q) {
-							state->active.erase(id);
-						} else if (auto activity = Decode(result, sentAt, now);
-								activity.track) {
-							state->active.insert_or_assign(id, std::move(activity));
+						const auto absent = (result.description == u"0"_q);
+						auto activity = absent
+							? Activity{ .track = {}, .expiresAt = sentAt + kLease }
+							: Decode(result, sentAt, now);
+						const auto i = cache->confirmed.find(id);
+						const auto newer = (i == cache->confirmed.end())
+							|| (i->second.request < request);
+						if (newer && activity.expiresAt > now && (activity.track || absent)) {
+							activity.request = request;
+							cache->confirmed.insert_or_assign(id, std::move(activity));
 						}
 					}
-					Notify(*state);
+					Notify(*cache);
 				},
 				[=] {
 					if (const auto state = weak.lock();
@@ -315,6 +354,7 @@ void WatchList(
 	};
 	state->poll.setCallback(refresh);
 	lifetime.add([state] {});
+	cache->changed.events() | rpl::on_next(update, lifetime);
 	view->events() | rpl::filter([](not_null<QEvent*> event) {
 		return event->type() == QEvent::Show;
 	}) | rpl::on_next(refresh, lifetime);
@@ -327,8 +367,12 @@ void WatchList(
 				++state->generation;
 				state->pending = 0;
 				state->poll.cancel();
-				state->active.clear();
-				Notify(*state);
+				if (cache->confirmed.empty()) {
+					update();
+				} else {
+					cache->confirmed.clear();
+					Notify(*cache);
+				}
 			}
 		}
 	}, lifetime);

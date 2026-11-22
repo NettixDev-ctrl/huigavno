@@ -65,6 +65,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "lottie/lottie_multi_player.h"
 #include "main/main_session.h"
 #include "menu/menu_mute.h"
+#include "mokagram/settings/mokagram_settings_box.h"
 #include "settings/settings_credits_graphics.h"
 #include "settings/sections/settings_information.h"
 #include "settings/sections/settings_premium.h"
@@ -84,6 +85,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/peer/video_userpic_player.h"
 #include "ui/rect.h"
 #include "ui/effects/numbers_animation.h"
+#include "ui/text/text_custom_emoji.h"
 #include "ui/text/text_utilities.h"
 #include "ui/widgets/fields/input_field.h"
 #include "ui/top_background_gradient.h"
@@ -1391,6 +1393,11 @@ void TopBar::setupUserpicButton(
 	};
 	if (_source == Source::Profile) {
 		if (const auto user = _peer->asUser()) {
+			Mokagram::Settings::RowIconsUpdated() | rpl::on_next([=] {
+				if (_listeningTrack) {
+					update();
+				}
+			}, _userpicButton->lifetime());
 			Mokagram::Music::Presence::Watch(
 				user,
 				this,
@@ -3001,11 +3008,41 @@ void TopBar::paintEvent(QPaintEvent *e) {
 
 	if (clipBounds.intersects(geometry)) {
 		paintUserpic(p, geometry);
+		const auto listening = _listeningTrack && _progress.current() > 0.85;
 		// Mokagram: the listening ring fits inside the story outline.
-		if (_listeningTrack && _progress.current() > 0.85) {
+		if (listening) {
 			Mokagram::Music::Presence::PaintRing(p, geometry, crl::now());
 		}
 		paintStoryOutline(p, geometry);
+		if (listening) {
+			const auto packSize = style::ConvertScale(28);
+			if (!_listeningIcon) {
+				_listeningIcon = Mokagram::Settings::AltIconEmoji(
+					u"🎵"_q, [=] { update(); }, packSize);
+			}
+			if (_listeningIcon && _listeningIcon->ready()) {
+				// Mokagram: the badge stays inside the avatar bounds.
+				const auto center = QRectF(geometry).center();
+				const auto offset = geometry.width() * 0.35;
+				const auto radius = style::ConvertFloatScale(9.);
+				const auto iconSize = style::ConvertFloatScale(11.);
+				const auto badgeCenter = center + QPointF(offset, -offset);
+				p.save();
+				auto hq = PainterHighQualityEnabler(p);
+				p.setOpacity(1.);
+				p.setPen(Qt::NoPen);
+				p.setBrush(st::windowBgActive);
+				p.drawEllipse(badgeCenter, radius, radius);
+				p.translate(badgeCenter - QPointF(iconSize / 2., iconSize / 2.));
+				p.scale(iconSize / packSize, iconSize / packSize);
+				_listeningIcon->paint(p, {
+					.textColor = st::activeButtonFg->c,
+					.now = crl::now(),
+					.paused = true,
+				});
+				p.restore();
+			}
+		}
 	}
 
 	paintTabSubtitle(p);

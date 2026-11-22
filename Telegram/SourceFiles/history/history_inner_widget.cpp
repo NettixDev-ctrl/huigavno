@@ -445,6 +445,29 @@ HistoryInner::HistoryInner(
 
 	setMouseTracking(true);
 	setAccessibleName(tr::lng_sr_message_list(tr::now));
+	// Mokagram: check only the senders whose avatars are visible.
+	Mokagram::Music::Presence::WatchList(&session(), this, [=] {
+		auto ids = std::vector<uint64>();
+		if (_visibleAreaTop >= _visibleAreaBottom || hasPendingResizedItems()) {
+			return ids;
+		}
+		enumerateUserpics([&](not_null<Element*> view, int top) {
+			if (top >= _visibleAreaBottom) {
+				return false;
+			}
+			const auto from = view->data()->displayFrom();
+			const auto user = from ? from->asUser() : nullptr;
+			if (user && top + st::msgPhotoSize > _visibleAreaTop
+				&& Mokagram::Music::Presence::CanWatch(user)) {
+				ids.push_back(peerToUser(user->id).bare);
+			}
+			return true;
+		});
+		return ids;
+	}, [=](Mokagram::Music::Presence::Tracks tracks) {
+		_listeningTracks = std::move(tracks);
+		update(0, _visibleAreaTop, width(), _visibleAreaBottom - _visibleAreaTop);
+	}, lifetime());
 	Core::App().inAppKeyPressed(
 	) | rpl::on_next([=] {
 		registerReadMetricsActivity();
@@ -1779,6 +1802,13 @@ void HistoryInner::paintEvent(QPaintEvent *e) {
 					width(),
 					st::msgPhotoSize,
 					context.paused);
+				// Mokagram: draw the listening ring over the sender photo.
+				if (const auto user = from->asUser(); user
+					&& _listeningTracks.contains(peerToUser(user->id).bare)
+					&& Mokagram::Music::Presence::CanWatch(user)) {
+					Mokagram::Music::Presence::PaintRing(p, myrtlrect(
+						st::historyPhotoLeft, userpicTop, st::msgPhotoSize, st::msgPhotoSize));
+				}
 			} else if (const auto info = item->displayHiddenSenderInfo()) {
 				if (info->customUserpic.empty()) {
 					info->emptyUserpic.paintCircle(

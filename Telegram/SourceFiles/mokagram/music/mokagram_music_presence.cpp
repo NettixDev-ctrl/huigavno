@@ -340,30 +340,21 @@ void PaintRing(QPainter &p, const QRect &avatar, crl::time now) {
 	p.save();
 	auto hq = PainterHighQualityEnabler(p);
 	const auto rect = QRectF(avatar);
-	const auto phase = (now % 2400) / 2400.;
-	const auto pulse = (std::sin(phase * M_PI * 2) + 1.) / 2.;
-
-	// Мягкое свечение кольца, которое дышит вместе с музыкой.
-	const auto glow = style::ConvertFloatScale(1.5 + pulse * 1.5);
-	p.setPen(QPen(st::windowBgActive->c, glow));
-	p.setBrush(Qt::NoBrush);
-	p.setOpacity(0.25 + pulse * 0.25);
-	p.drawEllipse(rect.adjusted(-glow, -glow, glow, glow));
-	p.setOpacity(1.);
-
-	// Само кольцо.
 	const auto line = style::ConvertFloatScale(2.);
 	const auto inset = line / 2.;
-	p.setPen(QPen(st::windowBgActive->c, line));
-	p.drawEllipse(rect.adjusted(inset, inset, -inset, -inset));
+	const auto path = rect.adjusted(inset, inset, -inset, -inset);
 
-	// Бегущий светлый сегмент: небольшая волна по окружности.
-	auto arc = QPen(st::windowBgActive->c, line + style::ConvertFloatScale(1.));
+	// MD3 indeterminate: дуга вращается и дышит длиной, как загрузка Google.
+	constexpr auto kCycle = crl::time(1800);
+	const auto phase = (now % kCycle) / double(kCycle);
+	const auto sweep = 40. + 260. * (0.5 - 0.5 * std::cos(phase * M_PI * 2));
+	const auto start = -90. + phase * 360.;
+
+	auto arc = QPen(st::windowBgActive->c, line);
 	arc.setCapStyle(Qt::RoundCap);
 	p.setPen(arc);
-	const auto span = 40.; // градусов
-	const auto start = phase * 360. - span / 2.;
-	p.drawArc(rect.adjusted(inset, inset, -inset, -inset), int(-start * 16), int(span * 16));
+	p.setBrush(Qt::NoBrush);
+	p.drawArc(path, int(-start * 16), int(sweep * 16));
 	p.restore();
 }
 

@@ -1180,9 +1180,6 @@ void PlayIndex(int index, bool skipUnavailable) {
 				&& queue.tracks[queue.index].id == track.id
 				&& Media::Player::instance()->current(AudioMsgId::Type::Song) == playback;
 		};
-		if (!skipUnavailable) {
-			controller->showToast(QString::fromUtf8(Lang::Tr("Загружаю: ")) + track.title);
-		}
 		DownloadYouTubeMusic(track, [=](const QString &path, const QString &error) {
 			if (!valid()) return;
 			auto &queue = QueueState();

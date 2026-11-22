@@ -231,7 +231,7 @@ void RegisterSettings() {
 	playerEntry({
 		.key = Music::Presence::kShowKey,
 		.title = QString::fromUtf8(Lang::Tr("Показывать активность прослушивания")),
-		.description = QString::fromUtf8(Lang::Tr("Запрашивает у @mokamusic_testbot текущие треки пользователей из открытого профиля, чата и видимого списка чатов.")),
+		.description = QString::fromUtf8(Lang::Tr("Передаёт @mokagent ID пользователей из открытого профиля, шапки чата, видимых строк списка чатов и видимых аватаров у сообщений, чтобы проверить активность прослушивания.")),
 		.kind = S::Kind::Bool,
 		.defaultValue = false,
 	});

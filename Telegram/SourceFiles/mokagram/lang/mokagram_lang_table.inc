@@ -858,7 +858,7 @@
 	{ "Своё короткое имя для команды, например rm для .del", "Your own short name for a command, for example rm for .del" },
 	{ "Сейчас играет", "Now playing" },
 	{ "Показывать активность прослушивания", "Show listening activity" },
-	{ "Запрашивает у @mokamusic_testbot текущие треки пользователей из открытого профиля, чата и видимого списка чатов.", "Asks @mokamusic_testbot for current tracks from the open profile, chat, and visible chat list." },
+	{ "Передаёт @mokagent ID пользователей из открытого профиля, шапки чата, видимых строк списка чатов и видимых аватаров у сообщений, чтобы проверить активность прослушивания.", "Sends user IDs from the open profile, chat header, visible chat rows, and visible message avatars to @mokagent to check listening activity." },
 	{ "Показывать, что я слушаю", "Share what I’m listening to" },
 	{ "Для всех аккаунтов на этом устройстве. Название, исполнитель и публичный идентификатор трека SoundCloud видны всем, кто запрашивает статус у @mokamusic_testbot.", "Applies to all accounts on this device. Anyone who asks @mokamusic_testbot for your status can see the title, artist, and public SoundCloud track ID." },
 	{ "Сердце", "Heart" },

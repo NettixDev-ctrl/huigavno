@@ -614,6 +614,32 @@ ListWidget::ListWidget(
 	setAttribute(Qt::WA_AcceptTouchEvents);
 	setMouseTracking(true);
 	setAccessibleName(tr::lng_sr_message_list(tr::now));
+	// Mokagram: watch visible message avatars in chats and threads.
+	if (_context == Context::History || _context == Context::Replies
+		|| _context == Context::Monoforum) {
+		Mokagram::Music::Presence::WatchList(_session, this, [=] {
+			auto ids = std::vector<uint64>();
+			if (_visibleTop >= _visibleBottom) {
+				return ids;
+			}
+			enumerateUserpics([&](not_null<Element*> view, int top) {
+				if (top >= _visibleBottom) {
+					return false;
+				}
+				const auto from = view->displayFrom();
+				const auto user = from ? from->asUser() : nullptr;
+				if (user && top + st::msgPhotoSize > _visibleTop
+					&& Mokagram::Music::Presence::CanWatch(user)) {
+					ids.push_back(peerToUser(user->id).bare);
+				}
+				return true;
+			});
+			return ids;
+		}, [=](Mokagram::Music::Presence::Tracks tracks) {
+			_listeningTracks = std::move(tracks);
+			update(0, _visibleTop, width(), _visibleBottom - _visibleTop);
+		}, lifetime());
+	}
 	if (const auto scroll = _delegate->listScrollArea()) {
 		scroll->lockWheelDirection();
 		const auto crossAxis = [=](QPoint delta, Qt::ScrollPhase phase) {
@@ -3709,6 +3735,17 @@ void ListWidget::paintUserpics(
 					view->width(),
 					st::msgPhotoSize,
 					context.paused);
+				// Mokagram: draw the listening ring over the sender photo.
+				if (const auto user = from->asUser(); user
+					&& _listeningTracks.contains(peerToUser(user->id).bare)
+					&& Mokagram::Music::Presence::CanWatch(user)) {
+					Mokagram::Music::Presence::PaintRing(p, style::rtlrect(
+						st::historyPhotoLeft,
+						userpicTop,
+						st::msgPhotoSize,
+						st::msgPhotoSize,
+						view->width()));
+				}
 			} else if (const auto info = item->displayHiddenSenderInfo()) {
 				if (info->customUserpic.empty()) {
 					info->emptyUserpic.paintCircle(

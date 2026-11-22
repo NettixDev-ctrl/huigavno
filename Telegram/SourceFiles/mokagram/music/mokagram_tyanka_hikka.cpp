@@ -35,8 +35,15 @@ namespace {
 
 constexpr auto kSong = AudioMsgId::Type::Song;
 constexpr auto kDocumentId = DocumentId(0x4D4F4D0000000001ULL);
-constexpr auto kExcerptStarts = std::array{ 34000, 56000, 82000, 107000 };
-constexpr auto kExcerptLength = crl::time(2400);
+
+struct WordTiming {
+	crl::time start;
+	crl::time end;
+};
+
+constexpr auto kWords = std::to_array<WordTiming>({
+#include "mokagram/music/mokagram_tyanka_hikka_words.inc"
+});
 
 [[nodiscard]] QString SettingKey() {
 	return u"player.tyanka_hikka"_q;
@@ -125,7 +132,7 @@ public:
 			}
 		}
 
-		_excerpts = {};
+		_word.reset();
 		const auto document = session->data().document(
 			kDocumentId,
 			0,
@@ -162,7 +169,7 @@ protected:
 			|| type == QEvent::Wheel
 			|| (type == QEvent::KeyPress
 				&& !static_cast<QKeyEvent*>(event)->isAutoRepeat())) {
-			playExcerpt();
+			playWord();
 		}
 		return false;
 	}
@@ -176,23 +183,21 @@ private:
 		const auto app = QCoreApplication::instance();
 		if (enabled) {
 			_path = TrackPath();
+			_nextWord = 0;
 			app->installEventFilter(this);
-			playExcerpt();
 		} else {
 			app->removeEventFilter(this);
-			_excerpts = {};
+			_word.reset();
 			if (IsCurrentSong()) {
 				Media::Player::instance()->stop(kSong);
 			}
 		}
 	}
 
-	void playExcerpt() {
+	void playWord() {
 		if (_path.isEmpty()
 			|| !Core::App().settings().notificationsVolume()
-			|| std::ranges::any_of(_excerpts, [](const auto &excerpt) {
-				return excerpt && excerpt->isActive();
-			})) {
+			|| (_word && _word->isActive())) {
 			return;
 		}
 		if (IsCurrentSong()) {
@@ -202,20 +207,18 @@ private:
 				return;
 			}
 		}
-		auto &excerpt = _excerpts[_nextExcerpt];
-		if (!excerpt) {
-			excerpt = Media::Audio::Current().createTrack();
-			excerpt->fillFromFile(_path, kExcerptStarts[_nextExcerpt], kExcerptLength);
-		}
-		_nextExcerpt = (_nextExcerpt + 1) % kExcerptStarts.size();
-		excerpt->playOnce();
+		const auto word = kWords[_nextWord];
+		_nextWord = (_nextWord + 1) % kWords.size();
+		_word = Media::Audio::Current().createTrack();
+		_word->fillFromFile(_path, word.start, word.end - word.start);
+		_word->playOnce();
 	}
 
 	bool _unlocked = false;
 	bool _enabled = false;
 	QString _path;
-	size_t _nextExcerpt = 0;
-	std::array<std::unique_ptr<Media::Audio::Track>, kExcerptStarts.size()> _excerpts;
+	size_t _nextWord = 0;
+	std::unique_ptr<Media::Audio::Track> _word;
 	rpl::lifetime _lifetime;
 };
 

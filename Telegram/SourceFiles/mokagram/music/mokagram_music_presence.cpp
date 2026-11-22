@@ -15,13 +15,15 @@
 
 #include <QtCore/QStringList>
 
+#include <cmath>
+
 namespace Mokagram::Music::Presence {
 namespace {
 
 constexpr auto kLease = crl::time(35000);
-constexpr auto kRefresh = crl::time(15000);
-constexpr auto kPublishCheck = crl::time(2000);
-constexpr auto kReadInterval = crl::time(10000);
+constexpr auto kRefresh = crl::time(4000);
+constexpr auto kPublishCheck = crl::time(1000);
+constexpr auto kReadInterval = crl::time(2000);
 constexpr auto kLabelBytes = 150;
 constexpr auto kBatchSize = 12;
 const auto kResultPrefix = u"presence-v1:"_q;
@@ -334,14 +336,34 @@ void WatchList(
 	}, lifetime);
 }
 
-void PaintRing(QPainter &p, const QRect &avatar) {
+void PaintRing(QPainter &p, const QRect &avatar, crl::time now) {
 	p.save();
 	auto hq = PainterHighQualityEnabler(p);
+	const auto rect = QRectF(avatar);
+	const auto phase = (now % 2400) / 2400.;
+	const auto pulse = (std::sin(phase * M_PI * 2) + 1.) / 2.;
+
+	// Мягкое свечение кольца, которое дышит вместе с музыкой.
+	const auto glow = style::ConvertFloatScale(1.5 + pulse * 1.5);
+	p.setPen(QPen(st::windowBgActive->c, glow));
+	p.setBrush(Qt::NoBrush);
+	p.setOpacity(0.25 + pulse * 0.25);
+	p.drawEllipse(rect.adjusted(-glow, -glow, glow, glow));
+	p.setOpacity(1.);
+
+	// Само кольцо.
 	const auto line = style::ConvertFloatScale(2.);
 	const auto inset = line / 2.;
 	p.setPen(QPen(st::windowBgActive->c, line));
-	p.setBrush(Qt::NoBrush);
-	p.drawEllipse(QRectF(avatar).adjusted(inset, inset, -inset, -inset));
+	p.drawEllipse(rect.adjusted(inset, inset, -inset, -inset));
+
+	// Бегущий светлый сегмент: небольшая волна по окружности.
+	auto arc = QPen(st::windowBgActive->c, line + style::ConvertFloatScale(1.));
+	arc.setCapStyle(Qt::RoundCap);
+	p.setPen(arc);
+	const auto span = 40.; // градусов
+	const auto start = phase * 360. - span / 2.;
+	p.drawArc(rect.adjusted(inset, inset, -inset, -inset), int(-start * 16), int(span * 16));
 	p.restore();
 }
 

@@ -62,7 +62,7 @@ void WatchList(
 	Fn<void(Tracks)> changed,
 	rpl::lifetime &lifetime);
 [[nodiscard]] bool CanWatch(not_null<UserData*> user);
-void PaintRing(QPainter &p, const QRect &avatar);
+void PaintRing(QPainter &p, const QRect &avatar, crl::time now);
 void OpenTrack(not_null<Window::SessionController*> controller, Track track);
 
 } // namespace Mokagram::Music::Presence

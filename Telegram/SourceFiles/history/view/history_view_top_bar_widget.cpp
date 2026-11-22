@@ -10,6 +10,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "mokagram/notes/mokagram_notes.h"
 #include "mokagram/music/mokagram_music_presence.h"
 #include "mokagram/plugins/mokagram_plugin_install.h"
+#include "base/timer.h"
 #include <deque>
 
 #include "history/history.h"
@@ -1171,11 +1172,20 @@ void TopBarWidget::refreshInfoButton() {
 				? (ring->height() - st.photoSize) / 2
 				: st.photoPosition.y();
 			Mokagram::Music::Presence::PaintRing(
-				p, ring->myrtlrect(x, y, st.photoSize, st.photoSize));
+				p,
+				ring->myrtlrect(x, y, st.photoSize, st.photoSize),
+				crl::now());
 		});
+		const auto ringTimer = ring->lifetime().make_state<base::Timer>();
+		ringTimer->setCallback([=] { ring->update(); });
 		_listeningTrack.value() | rpl::on_next([=](
 				const Mokagram::Music::Presence::Track &track) {
 			ring->setVisible(bool(track));
+			if (track) {
+				ringTimer->callEach(30);
+			} else {
+				ringTimer->cancel();
+			}
 			info->setAccessibleName(track
 				? track.title
 				: tr::lng_settings_section_info(tr::now));

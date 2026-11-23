@@ -37,6 +37,7 @@
 
 #include "mokagram/settings/mokagram_settings_box.h"
 
+#include "base/invoke_queued.h"
 #include "base/timer.h"
 #include "base/unixtime.h"
 #include "base/options.h"
@@ -145,9 +146,7 @@ using details::LyricsView;
 using details::PlayingTrack;
 using details::ResolveCommentsTrack;
 
-class MusicSourceController final
-	: public ChatsListBoxController
-	, public base::has_weak_ptr {
+class MusicSourceController final : public ChatsListBoxController {
 public:
 	MusicSourceController(
 		not_null<Main::Session*> session,
@@ -189,7 +188,7 @@ public:
 				}
 			}
 			Settings::SetString(_key, _pins.join(u','));
-			sortPins();
+			_sortPinsQueued.call();
 		});
 		return menu;
 	}
@@ -210,19 +209,27 @@ protected:
 	std::unique_ptr<Row> createRow(not_null<History*> history) override {
 		const auto peer = history->peer;
 		if (peer->isRepliesChat() || peer->isVerifyCodes()) return nullptr;
-		crl::on_main(this, [=] { sortPins(); });
+		if (!_pins.isEmpty()) {
+			_sortPinsQueued.call();
+		}
 		return std::make_unique<Row>(history);
 	}
 
 private:
 	void sortPins() {
-		delegate()->peerListSortRows([=](const PeerListRow &a, const PeerListRow &b) {
+		if (!_pins.isEmpty()) {
+			auto ranks = base::flat_map<uint64, qsizetype>();
+			for (auto i = qsizetype(0); i != _pins.size(); ++i) {
+				ranks.try_emplace(_pins[i].toULongLong(), i);
+			}
 			const auto rank = [&](const PeerListRow &row) {
-				const auto i = _pins.indexOf(QString::number(row.peer()->id.value));
-				return i < 0 ? _pins.size() : i;
+				const auto i = ranks.find(row.peer()->id.value);
+				return i == ranks.end() ? _pins.size() : i->second;
 			};
-			return rank(a) < rank(b);
-		});
+			delegate()->peerListSortRows([&](const PeerListRow &a, const PeerListRow &b) {
+				return rank(a) < rank(b);
+			});
+		}
 		delegate()->peerListRefreshRows();
 	}
 
@@ -230,6 +237,7 @@ private:
 	Fn<void(not_null<Data::Thread*>)> _chosen;
 	const QString _key;
 	QStringList _pins;
+	SingleQueuedInvokation _sortPinsQueued{ [this] { sortPins(); } };
 };
 
 void ShowMusicSourceBox(

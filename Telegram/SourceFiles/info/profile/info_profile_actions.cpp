@@ -1499,8 +1499,9 @@ private:
 			std::min(width(), height()) / 2);
 		p.setPen(Qt::NoPen);
 		if (_collectible) {
-			// Mokagram: stretch the gift gradient across the track preview.
-			auto gradient = QRadialGradient(QPointF(0.5, 0.45), 0.65);
+			// Mokagram: start the gift glow behind the cover and title.
+			const auto centerX = isRightToLeft() ? 0.78 : 0.22;
+			auto gradient = QRadialGradient(QPointF(centerX, 0.5), 0.8);
 			gradient.setCoordinateMode(QGradient::ObjectMode);
 			gradient.setColorAt(0., shade(_collectible->centerColor));
 			gradient.setColorAt(1., background);

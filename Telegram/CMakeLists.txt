@@ -2970,18 +2970,26 @@ if (WIN32)
         ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:Telegram>/fonts
     COMMAND
         ${CMAKE_COMMAND} -E copy_if_different
-            ${res_loc}/fonts/mokagram/Nunito-Regular.ttf
-            $<TARGET_FILE_DIR:Telegram>/fonts/Nunito-Regular.ttf
+            ${res_loc}/fonts/mokagram/AdwaitaSans-Regular.ttf
+            $<TARGET_FILE_DIR:Telegram>/fonts/AdwaitaSans-Regular.ttf
     COMMAND
         ${CMAKE_COMMAND} -E copy_if_different
-            ${res_loc}/fonts/mokagram/Nunito-Italic.ttf
-            $<TARGET_FILE_DIR:Telegram>/fonts/Nunito-Italic.ttf
+            ${res_loc}/fonts/mokagram/AdwaitaSans-Italic.ttf
+            $<TARGET_FILE_DIR:Telegram>/fonts/AdwaitaSans-Italic.ttf
     COMMAND
         ${CMAKE_COMMAND} -E copy_if_different
-            ${res_loc}/fonts/mokagram/LICENSE-Nunito.txt
-            $<TARGET_FILE_DIR:Telegram>/fonts/LICENSE-Nunito.txt
+            ${res_loc}/fonts/mokagram/AdwaitaSans-SemiBold.ttf
+            $<TARGET_FILE_DIR:Telegram>/fonts/AdwaitaSans-SemiBold.ttf
+    COMMAND
+        ${CMAKE_COMMAND} -E copy_if_different
+            ${res_loc}/fonts/mokagram/AdwaitaSans-Bold.ttf
+            $<TARGET_FILE_DIR:Telegram>/fonts/AdwaitaSans-Bold.ttf
+    COMMAND
+        ${CMAKE_COMMAND} -E copy_if_different
+            ${res_loc}/fonts/mokagram/LICENSE-Adwaita-Sans.txt
+            $<TARGET_FILE_DIR:Telegram>/fonts/LICENSE-Adwaita-Sans.txt
     COMMENT
-        "Copying bundled Nunito fonts."
+        "Copying bundled Adwaita Sans fonts."
     VERBATIM
     )
 

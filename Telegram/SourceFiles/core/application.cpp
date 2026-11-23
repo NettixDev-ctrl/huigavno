@@ -158,21 +158,26 @@ void Start();
 namespace Core {
 namespace {
 
-// Mokagram: Windows builds carry a soft UI font with Cyrillic glyphs next to
-// Telegram.exe, so the interface is identical on systems where it is absent.
+// Mokagram: Windows builds carry the requested Adwaita Sans family next to
+// Telegram.exe, so Latin UI text uses the same face on every machine.
 [[nodiscard]] bool LoadMokagramUiFont() {
 	const auto directory = QDir(
 		QCoreApplication::applicationDirPath() + u"/fonts"_q);
 	if (!directory.exists()) {
 		return false;
 	}
-	const auto regular = directory.filePath(u"Nunito-Regular.ttf"_q);
-	const auto italic = directory.filePath(u"Nunito-Italic.ttf"_q);
+	const auto regular = directory.filePath(u"AdwaitaSans-Regular.ttf"_q);
+	const auto italic = directory.filePath(u"AdwaitaSans-Italic.ttf"_q);
+	const auto semibold = directory.filePath(u"AdwaitaSans-SemiBold.ttf"_q);
+	const auto bold = directory.filePath(u"AdwaitaSans-Bold.ttf"_q);
 	const auto regularId = QFontDatabase::addApplicationFont(regular);
 	const auto italicId = QFontDatabase::addApplicationFont(italic);
+	const auto semiboldId = QFontDatabase::addApplicationFont(semibold);
+	const auto boldId = QFontDatabase::addApplicationFont(bold);
 	return (regularId >= 0) && (italicId >= 0)
+		&& (semiboldId >= 0) && (boldId >= 0)
 		&& QFontDatabase::applicationFontFamilies(regularId).contains(
-			u"Nunito"_q);
+			u"Adwaita Sans"_q);
 }
 
 constexpr auto kQuitPreventTimeoutMs = crl::time(1500);
@@ -428,11 +433,11 @@ void Application::run() {
 			crl::now() - started));
 	});
 
-	// Mokagram: use the packaged Nunito for every UI context. Qt selects
-	// the regular, italic and synthesized demi-bold variants from this family.
+	// Mokagram: use packaged Adwaita Sans for every UI context. The static
+	// family provides regular, semibold, bold and italic faces.
 	style::SetCustomFont(
 		LoadMokagramUiFont()
-			? u"Nunito"_q
+			? u"Adwaita Sans"_q
 			: settings().customFontFamily());
 	style::internal::StartFonts();
 	perfStage("fonts");

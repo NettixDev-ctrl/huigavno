@@ -1007,15 +1007,8 @@ void RefillStream() {
 	}
 	queue.refilling = true;
 	const auto epoch = queue.streamEpoch;
-	auto context = StreamContext();
-	context.current = queue.current;
-	const auto from = std::max(0, queue.index - 4);
-	for (auto i = from; i < int(queue.tracks.size()); ++i) {
-		if (i != queue.index) {
-			context.avoid.push_back(queue.tracks[i]);
-		}
-	}
-	BuildStream(std::move(context), 12, [=](std::vector<Track> tracks, QString note) {
+	const auto videoId = queue.current.videoId;
+	const auto finish = [=](std::vector<Track> tracks, QString note) {
 		auto &queue = QueueState();
 		if (epoch != queue.streamEpoch) {
 			return;
@@ -1027,15 +1020,61 @@ void RefillStream() {
 		}
 		queue.changes.fire({});
 		PrefetchUpcoming();
-		if (queue.waiting) {
-			queue.waiting = false;
+		if (base::take(queue.waiting)
+			&& (videoId.isEmpty() || UsesQueue(Media::Player::instance()->current(
+				AudioMsgId::Type::Song)))) {
 			if (queue.index + 1 < int(queue.tracks.size())) {
-				PlayIndex(queue.index + 1);
+				PlayIndex(queue.index + 1, !videoId.isEmpty());
 			} else if (const auto controller = queue.controller.get(); controller && !note.isEmpty()) {
 				controller->showToast(note);
 			}
 		}
-	});
+	};
+	if (!videoId.isEmpty()) {
+		LoadYouTubeMusicRecommendations(videoId, [=](std::vector<Track> tracks) {
+			auto &queue = QueueState();
+			if (epoch != queue.streamEpoch) {
+				return;
+			}
+			if (!StreamEnabled()) {
+				queue.refilling = false;
+				queue.waiting = false;
+				return;
+			}
+			auto seen = std::set<QString>();
+			for (const auto &track : queue.tracks) {
+				const auto keys = TrackIdentityKeys(track);
+				seen.insert(keys.begin(), keys.end());
+			}
+			auto picked = std::vector<Track>();
+			for (auto &track : tracks) {
+				const auto keys = TrackIdentityKeys(track);
+				if (track.videoId == videoId || IsArtistBlocked(track)
+					|| std::ranges::any_of(keys, [&](const QString &key) {
+						return seen.contains(key);
+					})) {
+					continue;
+				}
+				seen.insert(keys.begin(), keys.end());
+				picked.push_back(std::move(track));
+				if (picked.size() == 12) {
+					break;
+				}
+			}
+			finish(std::move(picked), QString::fromUtf8(Mokagram::Lang::Tr(
+				"Не нашлось подходящих треков. Попробуйте позже.")));
+		});
+		return;
+	}
+	auto context = StreamContext();
+	context.current = queue.current;
+	const auto from = std::max(0, queue.index - 4);
+	for (auto i = from; i < int(queue.tracks.size()); ++i) {
+		if (i != queue.index) {
+			context.avoid.push_back(queue.tracks[i]);
+		}
+	}
+	BuildStream(std::move(context), 12, finish);
 }
 
 // Три следующих трека готовим заранее: переход на них будет без загрузки.
@@ -1127,8 +1166,7 @@ void Subscribe() {
 				&& count > 0) {
 				PlayIndex(0);
 			} else if (StreamEnabled()) {
-				// Вечная очередь: даже один трек из EP или локальный трек
-				// продолжается подборкой SoundCloud.
+				// Вечная очередь продолжает даже один трек из EP или локальный трек.
 				queue.stream = true;
 				queue.waiting = true;
 				RefillStream();
@@ -1153,6 +1191,11 @@ void PlayIndex(int index, bool skipUnavailable) {
 		}, std::max(queue.index, index), true);
 	}
 	const auto track = queue.tracks[index];
+	if (track.videoId.isEmpty() != queue.current.videoId.isEmpty()) {
+		++queue.streamEpoch;
+		queue.refilling = false;
+	}
+	queue.waiting = false;
 	const auto token = ++queue.pendingToken;
 	queue.index = index;
 	queue.currentId = track.id;

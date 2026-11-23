@@ -4,6 +4,7 @@
 // mokagram-id: 8becca5f
 #include "mokagram/music/mokagram_music_library.h"
 #include "mokagram/lang/mokagram_lang.h"
+#include "mokagram/music/mokagram_youtube_music.h"
 
 #include "base/random.h"
 #include "rpl/event_stream.h"
@@ -1385,7 +1386,12 @@ bool IsLiked(const QString &trackId) {
 	return false;
 }
 
-void SetLiked(const Track &track, bool liked) {
+bool SetLiked(const Track &track, bool liked) {
+	if (liked && (!track.videoId.isEmpty()
+		|| track.id.startsWith(u"yt:"_q)
+		|| (track.unavailable && HasYouTubeMusicMetadata(track)))) {
+		return false;
+	}
 	auto &lib = Lib();
 	const auto i = std::find_if(lib.liked.begin(), lib.liked.end(), [&](const Liked &l) {
 		return l.track.id == track.id;
@@ -1412,11 +1418,10 @@ void SetLiked(const Track &track, bool liked) {
 			std::erase(lib.remoteLikes, track.id);
 		}
 	} else {
-		return;
+		return false;
 	}
 	if (Music::Account::IsLoggedIn()) {
 		// Постановка лайка в аккаунт идёт фоном: сердечко отвечает мгновенно.
-		// Треки YouTube Music живут только локально: публичного id SoundCloud у них нет.
 		if (track.id.toULongLong()) {
 			Music::Account::SetTrackLiked(track.id, liked);
 		} else if (IsTelegramId(track.id) && !track.title.trimmed().isEmpty()) {
@@ -1448,6 +1453,7 @@ void SetLiked(const Track &track, bool liked) {
 	}
 	Save();
 	lib.likesChanged.fire({});
+	return true;
 }
 
 std::vector<Track> LikedTracks() {

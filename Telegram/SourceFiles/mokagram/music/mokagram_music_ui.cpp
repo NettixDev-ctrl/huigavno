@@ -11780,8 +11780,10 @@ void ShowPlayerBox(not_null<Window::SessionController*> controller) {
 		heart->setClickedCallback([=] {
 			const auto track = PlayingTrack();
 			if (!track.id.isEmpty()) {
-				SetLiked(track, !IsLiked(track.id));
-				heart->animateLike(IsLiked(track.id));
+				const auto liked = !IsLiked(track.id);
+				if (SetLiked(track, liked)) {
+					heart->animateLike(liked);
+				}
 			}
 		});
 		previous->setClickedCallback([=] { step(-1); });

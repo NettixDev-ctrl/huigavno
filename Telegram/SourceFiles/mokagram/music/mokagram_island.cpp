@@ -1568,8 +1568,7 @@ void Island::activate(Part part) {
 	case Part::Heart:
 		if (const auto track = CurrentQueueTrack(); !track.id.isEmpty()) {
 			const auto liked = !IsLiked(track.id);
-			SetLiked(track, liked);
-			if (liked) {
+			if (SetLiked(track, liked) && liked) {
 				_heartPop.start([=] { update(); }, 0., 1., crl::time(360), anim::easeOutCubic);
 			}
 		}

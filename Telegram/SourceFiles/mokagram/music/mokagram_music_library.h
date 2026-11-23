@@ -15,7 +15,8 @@ namespace Mokagram::Music {
 
 // Лайки. Хранятся на диске (JSON), новые сверху.
 [[nodiscard]] bool IsLiked(const QString &trackId);
-void SetLiked(const Track &track, bool liked);
+// Возвращает true, если состояние лайка изменилось.
+bool SetLiked(const Track &track, bool liked);
 [[nodiscard]] std::vector<Track> LikedTracks();
 // Лайки, пришедшие из аккаунта SoundCloud: их не отправляем обратно, а
 // снятый в аккаунте лайк убирается и локально. Возвращает число новых треков.

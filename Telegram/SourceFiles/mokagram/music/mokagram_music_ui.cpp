@@ -10662,25 +10662,13 @@ bool ToggleTrackLike(
 		previous->hide();
 	}
 	const auto s = [](int value) { return style::ConvertScale(value); };
-	auto icon = object_ptr<Ui::RpWidget>((QWidget*)nullptr);
-	const auto badge = icon.data();
-	badge->resize(s(28), s(28));
-	badge->setAttribute(Qt::WA_TransparentForMouseEvents);
-	badge->paintOn([=, pack = std::make_shared<std::shared_ptr<void>>()](QPainter &p) {
-		auto hq = PainterHighQualityEnabler(p);
-		p.setPen(Qt::NoPen);
-		p.setBrush(st::windowBgActive);
-		p.drawRoundedRect(badge->rect(), s(8), s(8));
-		Settings::PaintPackIcon(p, badge->rect(), u"💟"_q, *pack, badge);
-	});
-	Settings::RowIconsUpdated() | rpl::on_next([=] { badge->update(); }, badge->lifetime());
-
 	const auto undo = QString::fromUtf8(Mokagram::Lang::Tr("Отменить лайк"));
 	const auto actionWidth = st::defaultLinkButton.font->width(undo);
 	lastToast = Ui::Toast::Show(parent.data(), {
 		.text = { QString::fromUtf8(Mokagram::Lang::Tr("Трек добавлен в избранное")) },
 		.singleline = true,
-		.iconContent = std::move(icon),
+		.iconLottie = u"toast/mokagram_track_liked"_q,
+		.iconLottieSize = QSize(s(28), s(28)),
 		.iconPadding = QMargins(s(12), s(8), s(10), s(8)),
 		.padding = rpl::single(QMargins(0, 0, actionWidth + s(14), 0)),
 		.st = &st::defaultToast,

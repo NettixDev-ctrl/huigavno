@@ -261,6 +261,8 @@ void Members::setupList() {
 	_list = object_ptr<ListWidget>(
 		this,
 		_listController.get());
+	// Mokagram: сплошная подложка строки вместо тёмных «пилюль» под юзерами.
+	_list->setRoundedRows(false);
 	_list->scrollToRequests(
 	) | rpl::on_next([this](Ui::ScrollToRequest request) {
 		auto addmin = (request.ymin < 0 || !_header)

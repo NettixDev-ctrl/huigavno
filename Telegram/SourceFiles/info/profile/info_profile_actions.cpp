@@ -1499,10 +1499,9 @@ private:
 			std::min(width(), height()) / 2);
 		p.setPen(Qt::NoPen);
 		if (_collectible) {
-			// Mokagram: match the gift header's compact glow and text palette.
-			auto gradient = QRadialGradient(
-				QPointF(width() / 2., height() / 3.),
-				height() / 2.);
+			// Mokagram: stretch the gift gradient across the track preview.
+			auto gradient = QRadialGradient(QPointF(0.5, 0.45), 0.65);
+			gradient.setCoordinateMode(QGradient::ObjectMode);
 			gradient.setColorAt(0., shade(_collectible->centerColor));
 			gradient.setColorAt(1., background);
 			p.setBrush(gradient);

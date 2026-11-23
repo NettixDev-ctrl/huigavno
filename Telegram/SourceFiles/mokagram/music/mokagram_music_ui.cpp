@@ -259,6 +259,11 @@ constexpr auto kRowHeight = 76;
 constexpr auto kCoverFadeDuration = crl::time(320);
 constexpr auto kTypingDelay = crl::time(400);
 constexpr auto kArtSize = 56;
+constexpr auto kCatalogRowHeight = 64;
+constexpr auto kCatalogArtSize = 48;
+constexpr auto kFeaturedArtistHeight = 96;
+constexpr auto kFeaturedArtistArtSize = 64;
+constexpr auto kFeaturedArtistButtonWidth = 112;
 
 struct Radio {
 	Track seed;
@@ -2471,7 +2476,7 @@ public:
 
 	void setCatalogStyle() {
 		_catalogStyle = true;
-		resize(width(), style::ConvertScale(64));
+		resize(width(), style::ConvertScale(kCatalogRowHeight));
 	}
 
 protected:
@@ -2513,7 +2518,9 @@ private:
 	}
 
 	[[nodiscard]] QRect listArtRect() const {
-		const auto side = _catalogStyle ? style::ConvertScale(48) : kArtSize;
+		const auto side = _catalogStyle
+			? style::ConvertScale(kCatalogArtSize)
+			: kArtSize;
 		return QRect(listMetric(20), (height() - side) / 2, side, side);
 	}
 
@@ -4000,7 +4007,8 @@ public:
 	, _title(std::move(title))
 	, _subtitle(std::move(subtitle))
 	, _artworkStyle(artworkStyle) {
-		resize(width(), style::ConvertScale(play ? 96 : 64));
+		resize(width(), style::ConvertScale(
+			play ? kFeaturedArtistHeight : kCatalogRowHeight));
 		setPointerCursor(true);
 		setFocusPolicy(Qt::TabFocus);
 		auto accessible = QStringList{ _title, _subtitle, std::move(type) };
@@ -4042,7 +4050,7 @@ protected:
 	void resizeEvent(QResizeEvent *event) override {
 		AbstractButton::resizeEvent(event);
 		if (_play) {
-			_play->setFullWidth(style::ConvertScale(112));
+			_play->setFullWidth(style::ConvertScale(kFeaturedArtistButtonWidth));
 			_play->moveToRight(style::ConvertScale(30), (height() - _play->height()) / 2);
 		}
 	}
@@ -4063,7 +4071,7 @@ protected:
 			p.setBrush(Qt::NoBrush);
 			p.drawRoundedRect(bounds, radius, radius);
 		}
-		const auto side = s(_play ? 64 : 48);
+		const auto side = s(_play ? kFeaturedArtistArtSize : kCatalogArtSize);
 		const auto art = QRect(s(_play ? 24 : 20), (height() - side) / 2, side, side);
 		const auto release = (_artworkStyle == CatalogArtwork::Release);
 		if (release) {
@@ -6621,58 +6629,133 @@ private:
 
 class SearchSkeleton final : public Ui::RpWidget {
 public:
-	explicit SearchSkeleton(QWidget *parent) : RpWidget(parent) {
-		resize(width(), 5 * kRowHeight);
+	SearchSkeleton(
+		QWidget *parent,
+		not_null<Ui::ScrollArea*> scroll,
+		std::optional<SearchCategory> category,
+		int headerHeight = 0)
+	: RpWidget(parent)
+	, _category(category)
+	, _collection(headerHeight > 0)
+	, _animation([this] { update(); }) {
 		setAttribute(Qt::WA_TransparentForMouseEvents);
-		if (!PowerSaving::On(PowerSaving::kAnimations)) {
-			_started = crl::now();
-			_animation.init([=](crl::time) {
-				update();
-				return !PowerSaving::On(PowerSaving::kAnimations);
-			});
-			_animation.start();
-		}
+		scroll->heightValue() | rpl::on_next([this, headerHeight](int height) {
+			resize(width(), std::max(height - headerHeight, 0));
+		}, lifetime());
+		PowerSaving::Changes(
+		) | rpl::on_next([this] { updateAnimation(); }, lifetime());
+		connect(qApp, &QGuiApplication::applicationStateChanged, this, [this] {
+			updateAnimation();
+		});
 	}
 
 protected:
-	void paintEvent(QPaintEvent *) override {
+	void showEvent(QShowEvent *event) override {
+		RpWidget::showEvent(event);
+		updateAnimation();
+	}
+
+	void hideEvent(QHideEvent *event) override {
+		if (_animation.animating()) {
+			_animation.stop();
+		}
+		RpWidget::hideEvent(event);
+	}
+
+	void paintEvent(QPaintEvent *event) override {
 		auto p = QPainter(this);
-		auto hq = PainterHighQualityEnabler(p);
+		const auto hq = PainterHighQualityEnabler(p);
+		const auto s = [](int value) { return style::ConvertScale(value); };
+		const auto catalog = _category.has_value();
+		const auto rowHeight = catalog ? s(kCatalogRowHeight) : kRowHeight;
+		const auto featured = _category == SearchCategory::All;
+		const auto featuredHeight = featured ? s(kFeaturedArtistHeight) : 0;
+		const auto artSize = catalog ? s(kCatalogArtSize) : kArtSize;
+		const auto hasTrackActions = !_category
+			|| featured
+			|| _category == SearchCategory::Tracks;
+		const auto hasMenu = catalog || !_collection;
+		const auto durationRight = width() - s(hasMenu ? 72 : 24);
+		const auto actionsLeft = durationRight - s(78);
+		const auto textRight = hasTrackActions ? actionsLeft : width() - s(14);
+		const auto left = s(20) + artSize + s(16) - 1;
+		const auto widths = std::array{ 184, 132, 216, 156, 248, 110, 196 };
+		const auto subWidths = std::array{ 84, 100, 68, 112, 90, 72, 128 };
+		constexpr auto kPulseDuration = crl::time(1700);
+		const auto elapsed = _animation.animating()
+			? crl::now() % kPulseDuration
+			: 0;
+		const auto pulse = (1. - std::cos(elapsed * 2. * M_PI / kPulseDuration)) / 2.;
 		auto base = st::windowSubTextFg->c;
-		base.setAlphaF(0.16);
-		const auto moving = _started && !PowerSaving::On(PowerSaving::kAnimations);
-		const auto sweep = moving
-			? std::fmod((crl::now() - _started) / 1400., 1.) * (width() + 160) - 80
-			: -1000.;
-		for (auto i = 0; i != 5; ++i) {
-			const auto top = i * kRowHeight;
-			auto shapes = QPainterPath();
-			shapes.addRoundedRect(QRectF(20, top + (kRowHeight - kArtSize) / 2, kArtSize, kArtSize), 8, 8);
-			const auto left = 20 + kArtSize + 16;
-			const auto available = std::max(width() - left - 32, 0);
-			shapes.addRoundedRect(QRectF(left, top + kRowHeight / 2 - 18, std::min(available, 180 - i * 14), 10), 5, 5);
-			shapes.addRoundedRect(QRectF(left, top + kRowHeight / 2 + 5, std::min(available, 100), 8), 4, 4);
-			p.fillPath(shapes, base);
-			if (moving) {
-				p.save();
-				p.setClipPath(shapes);
-				auto glow = QLinearGradient(sweep - 70, 0, sweep + 70, 0);
-				auto color = st::windowFg->c;
-				color.setAlphaF(0.);
-				glow.setColorAt(0., color);
-				color.setAlphaF(0.10);
-				glow.setColorAt(0.5, color);
-				color.setAlphaF(0.);
-				glow.setColorAt(1., color);
-				p.fillRect(rect(), glow);
-				p.restore();
+		base.setAlphaF(0.18 + 0.08 * pulse);
+		p.setPen(Qt::NoPen);
+		p.setBrush(base);
+		const auto bar = [&](int x, int center, int right, int w, int h) {
+			const auto width = std::clamp(right - x, 0, s(w));
+			const auto height = s(h);
+			p.drawRoundedRect(QRect(x, center - height / 2, width, height),
+				height / 2., height / 2.);
+		};
+		if (featured && event->rect().top() < featuredHeight) {
+			const auto center = featuredHeight / 2;
+			const auto side = s(kFeaturedArtistArtSize);
+			const auto card = QRect(0, 0, width(), featuredHeight)
+				.adjusted(s(8), s(4), -s(8), -s(4));
+			p.setBrush(st::windowBg);
+			p.drawRoundedRect(card, s(22), s(22));
+			p.setBrush(base);
+			p.drawEllipse(QRect(s(24), center - side / 2, side, side));
+			const auto textLeft = s(24) + side + s(16) - 1;
+			const auto buttonRight = width() - s(30);
+			const auto buttonLeft = buttonRight - s(kFeaturedArtistButtonWidth);
+			bar(textLeft, center - s(12), buttonLeft - s(14), 174, 14);
+			bar(textLeft, center + s(10), buttonLeft - s(14), 88, 8);
+			bar(std::max(buttonLeft, textLeft), center, buttonRight,
+				kFeaturedArtistButtonWidth, 40);
+		}
+		const auto first = std::max(event->rect().top() - featuredHeight, 0)
+			/ rowHeight;
+		auto top = featuredHeight + first * rowHeight;
+		for (auto i = first; top <= event->rect().bottom(); ++i, top += rowHeight) {
+			const auto center = top + rowHeight / 2;
+			const auto art = QRect(s(20), center - artSize / 2, artSize, artSize);
+			if (_category == SearchCategory::Artists) {
+				p.drawEllipse(art);
+			} else {
+				p.drawRoundedRect(art, s(8), s(8));
+			}
+			const auto index = i % widths.size();
+			bar(left, center - s(catalog ? 9 : 13), textRight, widths[index], 10);
+			bar(left, center + s(catalog ? 10 : 12), textRight, subWidths[index], 8);
+			if (hasTrackActions && actionsLeft >= left + s(32)) {
+				bar(durationRight - s(36), center, durationRight, 36, 8);
+				if (catalog || _collection) {
+					bar(actionsLeft + s(8), center, durationRight, 12, 12);
+				}
+				if (hasMenu) {
+					bar(width() - s(40), center, width() - s(22), 16, 6);
+				}
 			}
 		}
 	}
 
 private:
+	void updateAnimation() {
+		const auto animate = isVisible()
+			&& QGuiApplication::applicationState() == Qt::ApplicationActive
+			&& !anim::Disabled()
+			&& !PowerSaving::On(PowerSaving::kAnimations);
+		if (animate && !_animation.animating()) {
+			_animation.start();
+		} else if (!animate && _animation.animating()) {
+			_animation.stop();
+		}
+		update();
+	}
+
+	const std::optional<SearchCategory> _category;
+	const bool _collection;
 	Ui::Animations::Basic _animation;
-	crl::time _started = 0;
 };
 
 class SearchIndicator final : public QWidget {
@@ -7841,9 +7924,15 @@ protected:
 		return width >= style::ConvertScale(680);
 	}
 
+	[[nodiscard]] bool showCatalogFilterSkeleton() const {
+		return _searchPending && !_searchChats
+			&& !_searchFilterAvailable[int(SearchCategory::All)];
+	}
+
 	[[nodiscard]] bool catalogFiltersWrap(int width) const {
 		return width < style::ConvertScale(480)
-			&& std::ranges::count(_searchFilterAvailable, true) > 3;
+			&& (showCatalogFilterSkeleton()
+				|| std::ranges::count(_searchFilterAvailable, true) > 3);
 	}
 
 	[[nodiscard]] static int catalogFiltersTop(int width) {
@@ -7854,7 +7943,7 @@ protected:
 		if (_searchChats) {
 			return style::ConvertScale((width < style::ConvertScale(500)) ? 172 : 124);
 		}
-		if (!_searchFilterAvailable[int(SearchCategory::All)]) {
+		if (!_searchFilterAvailable[int(SearchCategory::All)] && !showCatalogFilterSkeleton()) {
 			return style::ConvertScale(catalogSourceInline(width) ? 72 : 120);
 		}
 		return catalogFiltersTop(width)
@@ -7879,7 +7968,8 @@ protected:
 			sourceWidth,
 			s(40));
 
-		if (!_searchFilterAvailable[int(SearchCategory::All)]) {
+		const auto skeleton = showCatalogFilterSkeleton();
+		if (!_searchFilterAvailable[int(SearchCategory::All)] && !skeleton) {
 			return;
 		}
 		const auto sheet = u"QPushButton { background: %1; color: %2; border: %7px solid transparent; border-radius: %8px; } "
@@ -7896,7 +7986,7 @@ protected:
 		auto y = area.y() + catalogFiltersTop(area.width());
 		auto placed = 0;
 		for (auto i = 0; i != int(_searchFilters.size()); ++i) {
-			if (!_searchFilterAvailable[i]) {
+			if (!_searchFilterAvailable[i] && !skeleton) {
 				continue;
 			}
 			if (wrap && placed == 3) {
@@ -9353,9 +9443,12 @@ protected:
 			if (emptySearch) {
 				break;
 			} else if (_searchPending) {
-				_tabList->add(object_ptr<SearchSkeleton>(_tabList));
+				const auto category = _searchChats
+					? std::nullopt
+					: std::make_optional(_searchCategory);
+				_tabList->add(object_ptr<SearchSkeleton>(_tabList, _tabScroll, category));
 			} else if (!_searchCollectionTitle.isEmpty()) {
-				_tabList->add(object_ptr<SearchCollectionBar>(
+				const auto header = _tabList->add(object_ptr<SearchCollectionBar>(
 					_tabList, _searchCollectionTitle, crl::guard(this, [=] {
 						_searchCollectionTitle.clear();
 						++_searchGen;
@@ -9363,7 +9456,8 @@ protected:
 						_tabScroll->scrollToY(_searchCollectionScroll);
 					})));
 				if (_searchCollectionLoading) {
-					_tabList->add(object_ptr<SearchSkeleton>(_tabList));
+					_tabList->add(object_ptr<SearchSkeleton>(
+						_tabList, _tabScroll, std::nullopt, header->height()));
 				} else if (_searchCollectionTracks.empty()) {
 					_tabNote = _searchCollectionStatus.isEmpty()
 						? tr("В подборке нет доступных треков")
@@ -9462,6 +9556,9 @@ protected:
 			break;
 		}
 		if (_tab == Tab::Search) {
+			if (_tabScroll->y() != computeLayout().scrollTop) {
+				relayout();
+			}
 			for (const auto child : _tabList->children()) {
 				if (auto widget = qobject_cast<QWidget*>(child); widget && widget->isEnabled()
 					&& (dynamic_cast<Row*>(widget)
@@ -9594,6 +9691,18 @@ protected:
 			p.fillRect(e->rect(), gradient);
 		}
 		const auto layout = computeLayout();
+		if (_tab == Tab::Search && showCatalogFilterSkeleton()) {
+			auto color = st::windowSubTextFg->c;
+			color.setAlphaF(0.18);
+			p.setPen(Qt::NoPen);
+			p.setBrush(color);
+			p.save();
+			p.setClipRect(layout.center, Qt::IntersectClip);
+			for (const auto chip : _searchFilters) {
+				p.drawRoundedRect(chip->geometry(), s(16), s(16));
+			}
+			p.restore();
+		}
 		// Одна общая дорожка и движущаяся пилюля вместо отдельных фонов вкладок.
 		p.setPen(Qt::NoPen);
 		const auto homeColor = homeDetailAccent();

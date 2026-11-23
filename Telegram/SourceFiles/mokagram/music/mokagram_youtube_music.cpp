@@ -3,6 +3,7 @@
 // of MOKAGRAM_NOTICE.md (section 7(b)): keep this notice when copying.
 #include "mokagram/music/mokagram_youtube_music.h"
 
+#include "logs.h"
 #include "mokagram/lang/mokagram_lang.h"
 #include "mokagram/music/mokagram_soundcloud.h"
 
@@ -434,9 +435,10 @@ void DownloadSong(const QString &tool, const QString &id, const QString &cachePr
 	}
 	const auto process = new QProcess(QCoreApplication::instance());
 	process->setStandardOutputFile(QProcess::nullDevice());
-	process->setStandardErrorFile(QProcess::nullDevice());
+	process->setStandardErrorFile(temp->filePath(u"yt-dlp.log"_q));
 	QObject::connect(process, &QProcess::errorOccurred, process, [=](QProcess::ProcessError error) {
 		if (error == QProcess::FailedToStart) {
+			LOG(("[yt] yt-dlp failed to start: %1").arg(process->errorString()));
 			process->deleteLater();
 			done({}, DownloadError());
 		}
@@ -447,6 +449,15 @@ void DownloadSong(const QString &tool, const QString &id, const QString &cachePr
 			? CachedAudio(temp->filePath(u"audio."_q))
 			: QString();
 		if (file.isEmpty()) {
+			auto log = QFile(temp->filePath(u"yt-dlp.log"_q));
+			if (log.open(QIODevice::ReadOnly)) {
+				const auto text = QString::fromUtf8(log.readAll()).right(2000);
+				LOG(("[yt] download failed %1 code %2 status %3: %4")
+					.arg(id)
+					.arg(code)
+					.arg(status == QProcess::NormalExit ? 1 : 0)
+					.arg(text));
+			}
 			done({}, DownloadError());
 			return;
 		}
@@ -502,10 +513,11 @@ void DownloadYouTubeMusic(const Track &track, AudioFileDone done) {
 	const auto key = known
 		? track.videoId
 		: QString::number(track.id.toULongLong());
-	const auto prefix = (known ? u"/yt-v-"_q : u"/yt-"_q) + key + u'.';
+	const auto prefix = CacheDir() + (known ? u"/yt-v-"_q : u"/yt-"_q) + key + u'.';
 	LoadCachedAudio(prefix, CachedAudio(prefix), [=](AudioFileDone finish) {
 		const auto tool = FindTool(u"yt-dlp"_q);
 		if (tool.isEmpty()) {
+			LOG(("[yt] yt-dlp not found"));
 			finish({}, QString::fromUtf8(Lang::Tr("Для воспроизведения из YouTube Music установите yt-dlp")));
 			return;
 		}

@@ -9,6 +9,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "base/event_filter.h"
 #include "core/application.h"
+#include "main/main_session.h"
+#include "core/ui_integration.h" // TextContext: глаза стримера.
+#include "mokagram/streamer/mokagram_streamer.h"
 #include "info/profile/info_profile_text.h"
 #include "info/profile/info_profile_values.h"
 #include "lang/lang_keys.h"
@@ -665,9 +668,11 @@ PeerShortInfoBox::PeerShortInfoBox(
 	rpl::producer<QString> status,
 	rpl::producer<PeerShortInfoUserpic> userpic,
 	Fn<bool()> videoPaused,
-	const style::ShortInfoBox *stOverride)
+	const style::ShortInfoBox *stOverride,
+	not_null<Main::Session*> session)
 : _st(stOverride ? *stOverride : st::shortInfoBox)
 , _type(type)
+, _session(session)
 , _fields(std::move(fields))
 , _topRoundBackground(this)
 , _scroll(this, st::shortInfoScroll)
@@ -745,6 +750,8 @@ void PeerShortInfoBox::prepare() {
 void PeerShortInfoBox::prepareRows() {
 	using namespace Info::Profile;
 
+	const auto context = Core::TextContext({ .session = _session });
+
 	auto addInfoLineGeneric = [&](
 			rpl::producer<QString> &&label,
 			rpl::producer<TextWithEntities> &&text,
@@ -755,7 +762,9 @@ void PeerShortInfoBox::prepareRows() {
 			rpl::duplicate(text),
 			_st.label,
 			textSt,
-			st::shortInfoLabeledPadding);
+			st::shortInfoLabeledPadding,
+			st::defaultPopupMenu,
+			context);
 		_rows->add(object_ptr<Ui::OverrideMargins>(
 			_rows.get(),
 			std::move(line.wrap)));
@@ -801,7 +810,16 @@ void PeerShortInfoBox::prepareRows() {
 		tr::lng_context_copy_link(tr::now));
 	addInfoOneLine(
 		tr::lng_info_mobile_label(),
-		phoneValue() | rpl::map(tr::marked),
+		rpl::combine(
+			phoneValue(),
+			Mokagram::Streamer::ActiveValue(Mokagram::Streamer::Field::Phone)
+		) | rpl::map([=](QString phone, bool hide) {
+			return (hide && _type == PeerShortInfoType::Self)
+				? Mokagram::Streamer::MaskWithEmoji(
+					Mokagram::Streamer::Field::Phone,
+					phone)
+				: tr::marked(phone);
+		}),
 		tr::lng_profile_copy_phone(tr::now));
 	auto label = _fields.current().isBio
 		? tr::lng_info_bio_label()
@@ -809,7 +827,16 @@ void PeerShortInfoBox::prepareRows() {
 	addInfoLine(std::move(label), aboutValue(), _st.labeled);
 	addInfoOneLine(
 		tr::lng_info_username_label(),
-		usernameValue(),
+		rpl::combine(
+			usernameValue(),
+			Mokagram::Streamer::ActiveValue(Mokagram::Streamer::Field::Username)
+		) | rpl::map([=](TextWithEntities username, bool hide) {
+			return (hide && _type == PeerShortInfoType::Self)
+				? Mokagram::Streamer::MaskWithEmoji(
+					Mokagram::Streamer::Field::Username,
+					std::move(username))
+				: username;
+		}),
 		tr::lng_context_copy_mention(tr::now));
 	addInfoOneLine(
 		birthdayLabel(),

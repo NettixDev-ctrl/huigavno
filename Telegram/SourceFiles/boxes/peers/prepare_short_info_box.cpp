@@ -471,7 +471,8 @@ object_ptr<Ui::BoxContent> PrepareShortInfoBox(
 		StatusValue(peer),
 		std::move(userpic.value),
 		std::move(videoPaused),
-		stOverride);
+		stOverride,
+		&peer->session());
 
 	if (menuFiller) {
 		result->fillMenuRequests(

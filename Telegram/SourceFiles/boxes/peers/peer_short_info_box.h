@@ -32,6 +32,10 @@ class VerticalLayout;
 class RpWidget;
 } // namespace Ui
 
+namespace Main {
+class Session;
+} // namespace Main
+
 enum class PeerShortInfoType {
 	Self,
 	User,
@@ -162,7 +166,8 @@ public:
 		rpl::producer<QString> status,
 		rpl::producer<PeerShortInfoUserpic> userpic,
 		Fn<bool()> videoPaused,
-		const style::ShortInfoBox *stOverride);
+		const style::ShortInfoBox *stOverride,
+		not_null<Main::Session*> session);
 	~PeerShortInfoBox();
 
 	[[nodiscard]] rpl::producer<> openRequests() const;
@@ -194,6 +199,7 @@ private:
 
 	const style::ShortInfoBox &_st;
 	const PeerShortInfoType _type = PeerShortInfoType::User;
+	const not_null<Main::Session*> _session;
 
 	rpl::variable<PeerShortInfoFields> _fields;
 

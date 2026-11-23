@@ -81,6 +81,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "info/channel_statistics/earn/earn_format.h"
 #include "info/channel_statistics/earn/earn_icons.h"
 #include "info/channel_statistics/earn/info_channel_earn_list.h"
+#include "info/profile/info_profile_card_button.h"
 #include "info/profile/info_profile_icon.h"
 #include "info/profile/info_profile_phone_menu.h"
 #include "info/profile/info_profile_text.h"
@@ -1105,7 +1106,7 @@ auto AddActionButton(
 		const style::SettingsButton &st = st::infoSharedMediaButton) {
 	auto result = parent->add(object_ptr<Ui::SlideWrap<Ui::SettingsButton>>(
 		parent,
-		object_ptr<Ui::SettingsButton>(
+		object_ptr<Profile::CardButton>(
 			parent,
 			std::move(text),
 			st))
@@ -2951,7 +2952,7 @@ Section DetailsFiller::makeBotPermissions(not_null<UserData*> user) {
 	AddSkip(inner);
 	AddSubsectionTitle(inner, tr::lng_profile_bot_permissions_title());
 	const auto emoji = inner->add(
-		object_ptr<Ui::SettingsButton>(
+		object_ptr<Profile::CardButton>(
 			inner,
 			tr::lng_profile_bot_emoji_status_access(),
 			st::infoSharedMediaButton));
@@ -3611,7 +3612,7 @@ void ActionsFiller::addFastButtonsMode(not_null<UserData*> user) {
 	Expects(user->isBot());
 
 	const auto bots = &user->session().fastButtonsBots();
-	const auto button = _wrap->add(object_ptr<Ui::SettingsButton>(
+	const auto button = _wrap->add(object_ptr<Profile::CardButton>(
 		_wrap,
 		rpl::single(u"Fast buttons mode"_q),
 		st::infoSharedMediaButton));

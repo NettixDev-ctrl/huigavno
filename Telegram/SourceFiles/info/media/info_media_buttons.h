@@ -32,6 +32,12 @@ namespace Info::Media {
 
 using Type = Storage::SharedMediaType;
 
+// Mokagram: rows on a profile card have their own hover treatment.
+enum class ButtonLocation {
+	MediaList,
+	Profile,
+};
+
 [[nodiscard]] tr::phrase<lngtag_count> MediaTextPhrase(Type type);
 
 [[nodiscard]] Fn<QString(int)> MediaText(Type type);
@@ -58,7 +64,8 @@ using Type = Storage::SharedMediaType;
 	Ui::VerticalLayout *parent,
 	rpl::producer<int> &&count,
 	Fn<QString(int)> &&textFromCount,
-	Ui::MultiSlideTracker &tracker);
+	Ui::MultiSlideTracker &tracker,
+	ButtonLocation location = ButtonLocation::Profile);
 
 [[nodiscard]] not_null<Ui::SettingsButton*> AddButton(
 	Ui::VerticalLayout *parent,
@@ -68,6 +75,7 @@ using Type = Storage::SharedMediaType;
 	Data::SavedSublist *sublist,
 	PeerData *migrated,
 	Type type,
-	Ui::MultiSlideTracker &tracker);
+	Ui::MultiSlideTracker &tracker,
+	ButtonLocation location = ButtonLocation::MediaList);
 
 } // namespace Info::Media

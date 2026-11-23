@@ -23,6 +23,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "info/info_memento.h"
 #include "info/media/info_media_buttons.h"
 #include "info/peer_gifts/info_peer_gifts_widget.h"
+#include "info/profile/info_profile_card_button.h"
 #include "info/profile/info_profile_icon.h"
 #include "info/profile/info_profile_values.h"
 #include "info/stories/info_stories_widget.h"
@@ -182,7 +183,7 @@ namespace {
 	const auto wrap = parent->add(
 		object_ptr<Ui::SlideWrap<Ui::SettingsButton>>(
 			parent,
-			object_ptr<Ui::SettingsButton>(
+			object_ptr<CardButton>(
 				parent,
 				rpl::combine(
 					std::move(text),
@@ -265,7 +266,8 @@ object_ptr<Ui::SlideWrap<Ui::RpWidget>> SetupSharedMediaClassic(
 			sublist,
 			migrated,
 			type,
-			tracker);
+			tracker,
+			Media::ButtonLocation::Profile);
 		object_ptr<FloatingIcon>(
 			result,
 			icon,

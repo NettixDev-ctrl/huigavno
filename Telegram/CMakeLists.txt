@@ -1568,6 +1568,7 @@ PRIVATE
     info/profile/info_profile_badge.h
     info/profile/info_profile_balance_pill.cpp
     info/profile/info_profile_balance_pill.h
+    info/profile/info_profile_card_button.h
     info/profile/info_profile_birthday_effect.cpp
     info/profile/info_profile_birthday_effect.h
     info/profile/info_profile_cover.cpp

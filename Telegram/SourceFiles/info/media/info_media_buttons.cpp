@@ -27,6 +27,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "info/info_controller.h"
 #include "info/info_memento.h"
 #include "info/peer_gifts/info_peer_gifts_widget.h"
+#include "info/profile/info_profile_card_button.h"
 #include "info/profile/info_profile_values.h"
 #include "info/saved/info_saved_music_widget.h"
 #include "info/stories/info_stories_widget.h"
@@ -185,7 +186,8 @@ not_null<Ui::SlideWrap<Ui::SettingsButton>*> AddCountedButton(
 		Ui::VerticalLayout *parent,
 		rpl::producer<int> &&count,
 		Fn<QString(int)> &&textFromCount,
-		Ui::MultiSlideTracker &tracker) {
+		Ui::MultiSlideTracker &tracker,
+		ButtonLocation location) {
 	using namespace ::Settings;
 	auto forked = std::move(count)
 		| start_spawning(parent->lifetime());
@@ -196,12 +198,19 @@ not_null<Ui::SlideWrap<Ui::SettingsButton>*> AddCountedButton(
 			? textFromCount(count)
 			: QString();
 	});
-	auto button = parent->add(object_ptr<Ui::SlideWrap<Ui::SettingsButton>>(
-		parent,
-		object_ptr<Ui::SettingsButton>(
+	// Mokagram: keep the card's hover color distinct from its background.
+	auto row = (location == ButtonLocation::Profile)
+		? object_ptr<Ui::SettingsButton>(object_ptr<Profile::CardButton>(
 			parent,
 			std::move(text),
 			st::infoSharedMediaButton))
+		: object_ptr<Ui::SettingsButton>(
+			parent,
+			std::move(text),
+			st::infoSharedMediaButton);
+	auto button = parent->add(object_ptr<Ui::SlideWrap<Ui::SettingsButton>>(
+		parent,
+		std::move(row))
 	)->setDuration(
 		st::infoSlideDuration
 	)->toggleOn(
@@ -219,7 +228,8 @@ not_null<Ui::SettingsButton*> AddButton(
 		Data::SavedSublist *sublist,
 		PeerData *migrated,
 		Type type,
-		Ui::MultiSlideTracker &tracker) {
+		Ui::MultiSlideTracker &tracker,
+		ButtonLocation location) {
 	auto result = AddCountedButton(
 		parent,
 		Profile::SharedMediaCountValue(
@@ -229,7 +239,8 @@ not_null<Ui::SettingsButton*> AddButton(
 			migrated,
 			type),
 		MediaText(type),
-		tracker)->entity();
+		tracker,
+		location)->entity();
 	const auto weakSublist = base::make_weak(sublist);
 	const auto openInWindow = SeparateOpenCallback(
 		navigation,
@@ -237,7 +248,8 @@ not_null<Ui::SettingsButton*> AddButton(
 		topicRootId,
 		sublist,
 		type);
-	if (openInWindow) {
+	// Mokagram: keep hover on the profile card clear of overlapping tooltips.
+	if (openInWindow && location != ButtonLocation::Profile) {
 		Ui::InstallTooltip(result, [=] {
 			return Platform::IsMac()
 				? tr::lng_new_window_tooltip_cmd(tr::now)

@@ -7699,16 +7699,18 @@ protected:
 
 	void layoutCatalogHeader(const QRect &area) {
 		const auto s = [](int value) { return style::ConvertScale(value); };
-		const auto left = area.x() + s(20);
 		const auto inner = std::max(area.width() - s(40), 0);
 		const auto inlineSource = catalogSourceInline(area.width());
 		const auto sourceWidth = std::min(inner, s(240));
+		const auto gap = s(12);
 		const auto fieldWidth = inlineSource
-			? std::min(inner - sourceWidth - s(12), s(760))
+			? std::min(inner - sourceWidth - gap, s(760))
 			: inner;
+		const auto headerWidth = inlineSource ? fieldWidth + gap + sourceWidth : inner;
+		const auto left = area.x() + s(20) + (inner - headerWidth) / 2;
 		_searchField->setGeometry(left, area.y() + s(8), fieldWidth, s(52));
 		_sourceSwitch->setGeometry(
-			inlineSource ? left + fieldWidth + s(12) : left,
+			inlineSource ? left + fieldWidth + gap : left,
 			area.y() + s(inlineSource ? 14 : 68),
 			sourceWidth,
 			s(40));

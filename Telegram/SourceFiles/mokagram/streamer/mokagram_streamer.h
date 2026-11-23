@@ -41,6 +41,15 @@ void RegisterSettings();
 // https://t.me/name -> https://t.me/••••••
 [[nodiscard]] QString MaskUrl(const QString &url);
 
+// Маска теми же кастомными эмодзи «глаза», что показывает Telegram.
+// Возвращает текст с сущностями CustomEmoji: его надо показывать через
+// контекст с фабрикой кастомных эмодзи (Core::TextContext или
+// customEmojiManager().factory), иначе вместо глаз будет запасной символ.
+[[nodiscard]] TextWithEntities MaskWithEmoji(Field field, const QString &real);
+[[nodiscard]] TextWithEntities MaskWithEmoji(
+	Field field,
+	TextWithEntities real);
+
 // Что положить в буфер: настоящее, маска или пусто (если копирование запрещено).
 [[nodiscard]] QString ForCopy(Field field, const QString &real);
 // Запрещено ли копировать это поле сейчас. Если да, сразу показывает тост.

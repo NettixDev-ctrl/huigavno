@@ -27,6 +27,16 @@ namespace {
 
 constexpr auto kDot = QChar(0x2022);
 
+// Кастомные эмодзи «глаза» в режиме стримера вместо точек.
+constexpr uint64 kEyeEmojis[] = {
+	5900005585356590879ULL,
+	5900152048036351481ULL,
+	5900005413557899377ULL,
+	5900208440956948235ULL,
+	5899790188451729197ULL,
+	5900075425819791378ULL,
+};
+
 enum class CopyMode {
 	Real = 0,
 	Block = 1,
@@ -181,6 +191,38 @@ TextWithEntities Mask(Field field, TextWithEntities real) {
 	}
 	real.text = std::move(masked);
 	return real;
+}
+
+TextWithEntities MaskWithEmoji(Field field, const QString &real) {
+	const auto masked = Mask(field, real);
+	TextWithEntities result;
+	result.text = masked;
+	result.entities.reserve(masked.size());
+	for (int i = 0; i < masked.size(); ++i) {
+		if (masked.at(i) != kDot) {
+			continue;
+		}
+		const auto id = kEyeEmojis[i % (sizeof(kEyeEmojis) / sizeof(kEyeEmojis[0]))];
+		result.entities.emplace_back(
+			EntityType::CustomEmoji,
+			i,
+			1,
+			QString::number(id));
+	}
+	return result;
+}
+
+TextWithEntities MaskWithEmoji(Field field, TextWithEntities real) {
+	const auto dots = Mask(field, real.text);
+	if (dots.size() != real.text.size()) {
+		real.entities.clear();
+	}
+	auto result = MaskWithEmoji(field, real.text);
+	// Переносим не-маскирующие сущности (ссылки и т.п.).
+	for (const auto &entity : real.entities) {
+		result.entities.push_back(entity);
+	}
+	return result;
 }
 
 QString ForCopy(Field field, const QString &real) {

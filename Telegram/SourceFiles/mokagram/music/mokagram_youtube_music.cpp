@@ -25,6 +25,8 @@
 #include <QtNetwork/QNetworkReply>
 
 #include <algorithm>
+#include <cmath>
+#include <limits>
 
 namespace Mokagram::Music {
 namespace {
@@ -129,6 +131,24 @@ void LoadCatalogConfig(Fn<void(CatalogConfig)> done) {
 	return match.hasMatch()
 		? match.captured(1).toInt() * 3600 + match.captured(2).toInt() * 60 + match.captured(3).toInt()
 		: 0;
+}
+
+[[nodiscard]] qint64 ReadPlays(const QString &text) {
+	// Каталог запрашивается с hl=en. Значение может быть округлено самим YouTube Music.
+	static const auto pattern = QRegularExpression(
+		u"^(?:(\\d+|\\d{1,3}(?:,\\d{3})+)"
+		u"|(\\d+(?:\\.\\d+)?)([KMB]))\\s+plays?$"_q);
+	const auto match = pattern.match(text.trimmed());
+	if (!match.hasMatch()) {
+		return 0;
+	}
+	if (match.captured(3).isEmpty()) {
+		return match.captured(1).remove(u',').toLongLong();
+	}
+	const auto suffix = match.captured(3).front();
+	const auto multiplier = (suffix == u'B') ? 1e9 : (suffix == u'M') ? 1e6 : 1e3;
+	const auto count = std::round(match.captured(2).toDouble() * multiplier);
+	return (count < double(std::numeric_limits<qint64>::max())) ? qint64(count) : 0;
 }
 
 [[nodiscard]] QString VideoType(const QJsonObject &object) {
@@ -330,6 +350,18 @@ void CollectArtistSongs(
 	}
 	track.permalink = QString::fromLatin1(kOrigin) + u"/watch?v="_q + id;
 	track.durationMs = duration * 1000;
+	// Счётчик бывает в отдельной колонке метаданных после имени исполнителя.
+	for (auto column = 1; column < columns.size() && !track.playbackCount; ++column) {
+		for (const auto &entry : runs(column)) {
+			const auto run = entry.toObject();
+			if (!run.contains("navigationEndpoint")) {
+				track.playbackCount = ReadPlays(run.value("text").toString());
+				if (track.playbackCount) {
+					break;
+				}
+			}
+		}
+	}
 	track.uploaderName = artist;
 	track.unavailable = true;
 	result.push_back(std::move(track));

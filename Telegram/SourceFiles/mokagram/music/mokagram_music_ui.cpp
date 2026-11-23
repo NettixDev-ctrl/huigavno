@@ -7069,7 +7069,19 @@ public:
 				p.restore();
 			}
 			p.setOpacity(0.58 + 0.42 * plain);
-			p.fillPath(shape, st::boxBg);
+			if (_tab == Tab::Home && _homeArtistOpen) {
+				const auto base = st::windowBg->c;
+				const auto accent = homeDetailAccent();
+				auto gradient = QLinearGradient(0, 0, 0, area.height());
+				gradient.setColorAt(0., accent.isValid()
+					? anim::color(base, accent, 0.16)
+					: base);
+				gradient.setColorAt(0.65, base);
+				gradient.setColorAt(1., base);
+				p.fillPath(shape, gradient);
+			} else {
+				p.fillPath(shape, st::boxBg);
+			}
 			p.setOpacity(1.);
 			p.setFont(labelFont(19, true));
 			p.setPen(st::windowFg);
@@ -8833,6 +8845,7 @@ protected:
 			_homeAccent = ComputeAccent(image);
 			_nav[1]->setActiveColor(Ui::CountContrast(_homeAccent, Qt::white) >= Ui::CountContrast(_homeAccent, Qt::black)
 				? QColor(Qt::white) : QColor(Qt::black));
+			_queuePanel->update();
 			update();
 		}));
 	}
@@ -9336,6 +9349,7 @@ protected:
 						}
 					}), crl::guard(this, [=] {
 						updateHomeArtistBar();
+						_queuePanel->update();
 						update();
 					})), QMargins(0, 0, 0, style::ConvertScale(8)));
 				_homeAlbumHeader = albumHeader;
@@ -9809,6 +9823,7 @@ protected:
 			_tabScroll->scrollToY(keep);
 		}
 		updateHomeArtistBar();
+		_queuePanel->update();
 		update();
 		scheduleHomeMoreIfNeeded();
 	}
@@ -9914,7 +9929,8 @@ protected:
 				auto background = QLinearGradient(0, -offset, 0, end);
 				background.setColorAt(0., tone);
 				background.setColorAt(1., st::boxBg->c);
-				p.fillRect(e->rect().intersected(QRect(0, 0, width(), end)), background);
+				const auto header = QRect(_tabScroll->x(), 0, _tabScroll->width(), end);
+				p.fillRect(e->rect().intersected(header), background);
 			}
 		} else if (artistHeader) {
 			const auto top = _tabScroll->y();
@@ -9922,7 +9938,7 @@ protected:
 			const auto bannerHeight = artistHeader->artistBannerHeight();
 			const auto bannerBottom = top + bannerHeight - offset;
 			const auto visible = std::clamp(bannerBottom / double(std::max(top, 1)), 0., 1.);
-			const auto panel = QRect(0, 0, width(), top);
+			const auto panel = QRect(_tabScroll->x(), 0, _tabScroll->width(), top);
 			p.save();
 			p.setClipRect(panel, Qt::IntersectClip);
 			p.setOpacity(visible);

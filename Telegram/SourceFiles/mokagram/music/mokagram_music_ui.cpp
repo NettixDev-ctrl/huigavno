@@ -7059,7 +7059,18 @@ public:
 			object_ptr<Ui::VerticalLayout>(_queueScroll));
 		_queuePanel->paintOn([=](QPainter &p) {
 			const auto hq = PainterHighQualityEnabler(p);
-			p.fillPath(Ui::SquirclePath(QRectF(_queuePanel->rect()), s(22)), st::boxBg);
+			const auto area = _queuePanel->rect();
+			const auto shape = Ui::SquirclePath(QRectF(area), s(22));
+			const auto plain = _plainAnim.value(_tab == Tab::Now ? 0. : 1.);
+			if (plain < 1.) {
+				p.save();
+				p.setClipPath(shape, Qt::IntersectClip);
+				paintBackgroundPart(p, area, _queuePanel->pos());
+				p.restore();
+			}
+			p.setOpacity(0.58 + 0.42 * plain);
+			p.fillPath(shape, st::boxBg);
+			p.setOpacity(1.);
 			p.setFont(labelFont(19, true));
 			p.setPen(st::windowFg);
 			p.drawText(
@@ -8068,7 +8079,11 @@ protected:
 		}
 		const auto s = [](int v) { return style::ConvertScale(v); };
 		const auto offset = int(base::SafeRound((width() - target.x()) * (1. - progress)));
-		_queuePanel->setGeometry(target.translated(offset, 0));
+		const auto geometry = target.translated(offset, 0);
+		if (_queuePanel->geometry() != geometry) {
+			_queuePanel->setGeometry(geometry);
+			_queuePanel->update();
+		}
 		_queueScroll->setGeometry(
 			s(8), s(48), std::max(target.width() - s(16), 0),
 			std::max(target.height() - s(60), 0));
@@ -8559,7 +8574,10 @@ protected:
 		_tabScroll->setGraphicsEffect(nullptr);
 		_coverClosing.stop();
 		_plainAnim.start(
-			[=] { update(); },
+			[this] {
+				update();
+				_queuePanel->update();
+			},
 			_tab == Tab::Now ? 0. : 1.,
 			tab == Tab::Now ? 0. : 1.,
 			220,
@@ -10257,6 +10275,7 @@ private:
 		_backdropDirty = true;
 		update();
 		_view->update();
+		_queuePanel->update();
 	}
 
 	void repaintAnimatedBackdrop(crl::time now, bool finished = false) {

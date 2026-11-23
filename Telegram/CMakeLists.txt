@@ -2978,14 +2978,6 @@ if (WIN32)
             $<TARGET_FILE_DIR:Telegram>/fonts/AdwaitaSans-Italic.ttf
     COMMAND
         ${CMAKE_COMMAND} -E copy_if_different
-            ${res_loc}/fonts/mokagram/AdwaitaSans-SemiBold.ttf
-            $<TARGET_FILE_DIR:Telegram>/fonts/AdwaitaSans-SemiBold.ttf
-    COMMAND
-        ${CMAKE_COMMAND} -E copy_if_different
-            ${res_loc}/fonts/mokagram/AdwaitaSans-Bold.ttf
-            $<TARGET_FILE_DIR:Telegram>/fonts/AdwaitaSans-Bold.ttf
-    COMMAND
-        ${CMAKE_COMMAND} -E copy_if_different
             ${res_loc}/fonts/mokagram/LICENSE-Adwaita-Sans.txt
             $<TARGET_FILE_DIR:Telegram>/fonts/LICENSE-Adwaita-Sans.txt
     COMMENT

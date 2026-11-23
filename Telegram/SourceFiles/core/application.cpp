@@ -168,14 +168,9 @@ namespace {
 	}
 	const auto regular = directory.filePath(u"AdwaitaSans-Regular.ttf"_q);
 	const auto italic = directory.filePath(u"AdwaitaSans-Italic.ttf"_q);
-	const auto semibold = directory.filePath(u"AdwaitaSans-SemiBold.ttf"_q);
-	const auto bold = directory.filePath(u"AdwaitaSans-Bold.ttf"_q);
 	const auto regularId = QFontDatabase::addApplicationFont(regular);
 	const auto italicId = QFontDatabase::addApplicationFont(italic);
-	const auto semiboldId = QFontDatabase::addApplicationFont(semibold);
-	const auto boldId = QFontDatabase::addApplicationFont(bold);
 	return (regularId >= 0) && (italicId >= 0)
-		&& (semiboldId >= 0) && (boldId >= 0)
 		&& QFontDatabase::applicationFontFamilies(regularId).contains(
 			u"Adwaita Sans"_q);
 }
@@ -433,8 +428,8 @@ void Application::run() {
 			crl::now() - started));
 	});
 
-	// Mokagram: use packaged Adwaita Sans for every UI context. The static
-	// family provides regular, semibold, bold and italic faces.
+	// Mokagram: use packaged Adwaita Sans for every UI context. Its variable
+	// face covers Latin and Cyrillic and supplies UI weights through Qt.
 	style::SetCustomFont(
 		LoadMokagramUiFont()
 			? u"Adwaita Sans"_q

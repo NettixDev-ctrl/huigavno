@@ -256,19 +256,21 @@ void Members::setupButtons() {
 
 void Members::setupList() {
 	auto topSkip = _header ? _header->height() : 0;
-	_listController->setStyleOverrides(&st::infoMembersList);
+	// Mokagram: подложка под участниками должна быть цвета карточки
+	// секции (#3a3a3c), а не тёмного фона окна (#2c2c2e).
+	static const auto listSt = [] {
+		auto result = st::infoMembersList;
+		result.item.button.textBg = st::windowBgOver;
+		result.item.button.textBgOver = st::windowBgOver;
+		return result;
+	}();
+	_listController->setStyleOverrides(&listSt);
 	_listController->setStoriesShown(true);
 	_list = object_ptr<ListWidget>(
 		this,
 		_listController.get());
-	// Mokagram: сплошная подложка строки вместо тёмных «пилюль» под юзерами.
+	// Mokagram: подложка под участниками цвета карточки секции (#3a3a3c).
 	_list->setRoundedRows(false);
-	// Mokagram: цвет строк должен совпадать с цветом карточки секции
-	// (windowBgOver), а не с общим фоном окна (windowBg).
-	_list->paintRequest(
-	) | rpl::on_next([this](QRect clip) {
-		QPainter(_list.data()).fillRect(clip, st::windowBgOver);
-	}, _list->lifetime());
 	_list->scrollToRequests(
 	) | rpl::on_next([this](Ui::ScrollToRequest request) {
 		auto addmin = (request.ymin < 0 || !_header)

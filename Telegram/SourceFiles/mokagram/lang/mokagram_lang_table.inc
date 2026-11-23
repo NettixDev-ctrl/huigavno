@@ -1223,6 +1223,7 @@
 	{ "Слушать альбом", "Play album" },
 	{ "Треки", "Tracks" },
 	{ "Недоступен для воспроизведения", "Unavailable for playback" },
+	{ "%1 просл.", "%1 plays" },
 	{ "Не удалось воспроизвести трек из YouTube Music", "Could not play this track from YouTube Music" },
 	{ "Для воспроизведения из YouTube Music установите yt-dlp", "Install yt-dlp to play tracks from YouTube Music" },
 	{ "Не удалось загрузить треки альбома. Попробуйте снова.", "Could not load album tracks. Try again." },

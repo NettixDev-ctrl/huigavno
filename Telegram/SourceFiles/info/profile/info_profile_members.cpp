@@ -263,6 +263,12 @@ void Members::setupList() {
 		_listController.get());
 	// Mokagram: сплошная подложка строки вместо тёмных «пилюль» под юзерами.
 	_list->setRoundedRows(false);
+	// Mokagram: цвет строк должен совпадать с цветом карточки секции
+	// (windowBgOver), а не с общим фоном окна (windowBg).
+	_list->paintRequest(
+	) | rpl::on_next([this](QRect clip) {
+		QPainter(_list.data()).fillRect(clip, st::windowBgOver);
+	}, _list->lifetime());
 	_list->scrollToRequests(
 	) | rpl::on_next([this](Ui::ScrollToRequest request) {
 		auto addmin = (request.ymin < 0 || !_header)

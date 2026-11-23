@@ -707,7 +707,9 @@ void InitMessageFieldGeometry(not_null<Ui::InputField*> field) {
 	field->setMaxHeight(st::historyComposeFieldMaxHeight);
 
 	// st::messageSendingAnimationTextFromOffset.
-	field->setDocumentMargin(4.);
+	// Mokagram: bundled UI fonts have a slightly lower optical centre than
+	// Open Sans. Two extra pixels keep one-line input text centred in the pill.
+	field->setDocumentMargin(6.);
 	field->setAdditionalMargin(style::ConvertScale(4) - 4);
 }
 

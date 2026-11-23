@@ -1314,7 +1314,6 @@ MainMenu::MainMenu(
 	Ui::CreateChild<Ui::FlatLabel>(_footer.get(), st::mainMenuTelegramLabel))
 , _version(AddVersionLabel(_footer)) {
 	setProperty("moka-main-menu", true);
-	setProperty("moka-floating-main-menu", true);
 
 	// Режим стримера: имя в шапке рисуется без rpl, сбрасываем кэш текста.
 	Mokagram::Streamer::Changed(
@@ -1690,12 +1689,14 @@ void MainMenu::setupSetEmojiStatus() {
 }
 
 void MainMenu::parentResized() {
-	const auto inset = style::ConvertScale(12);
-	setGeometry(
-		inset,
-		inset,
-		st::mainMenuWidth,
-		std::max(parentWidget()->height() - 2 * inset, 0));
+	resize(st::mainMenuWidth, parentWidget()->height());
+	const auto radius = style::ConvertScale(28);
+	auto path = QPainterPath();
+	path.addRoundedRect(
+		QRectF(-radius, 0, width() + radius, height()),
+		radius,
+		radius);
+	setMask(QRegion(path.toFillPolygon().toPolygon()));
 }
 
 not_null<Ui::RpWidget*> MainMenu::createDockBar(QWidget *parent, int side) {
@@ -2324,11 +2325,10 @@ void MainMenu::paintEvent(QPaintEvent *e) {
 	const auto clip = e->rect();
 	const auto cover = QRect(0, 0, width(), coverHeight());
 
-	// Mokagram: menu is a single rounded surface instead of a sheet with a
-	// squared outer edge. Children remain in the existing layer, preserving
-	// the opening direction and keyboard/focus behaviour.
+	// Mokagram: a regular slide-out sheet, rounded only at the inner edge.
+	// The widget mask keeps the transparent corners free from child backgrounds.
 	const auto radius = style::ConvertScale(28);
-	const auto shape = QRectF(rect());
+	const auto shape = QRectF(-radius, 0, width() + radius, height());
 	auto hq = PainterHighQualityEnabler(p);
 	p.setPen(Qt::NoPen);
 	p.setBrush(st::mainMenuBg);

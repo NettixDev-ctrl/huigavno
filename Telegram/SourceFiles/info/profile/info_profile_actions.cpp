@@ -1384,7 +1384,9 @@ public:
 		) | rpl::on_next([=] {
 			if (const auto collectible = user->emojiStatusId().collectible) {
 				_profileColor = collectible->edgeColor;
+				_giftCenterColor = collectible->centerColor;
 			} else {
+				_giftCenterColor.reset();
 				const auto colors = user->session().api().peerColors(
 				).colorProfileFor(user);
 				_profileColor = (colors && !colors->bg.empty())
@@ -1467,29 +1469,45 @@ private:
 		const auto padding = style::ConvertScale(16);
 		const auto gap = style::ConvertScale(12);
 		const auto surface = st::windowBgOver->c;
-		const auto base = _profileColor
+		const auto edge = _profileColor
 			? Ui::BlendColors(surface, *_profileColor, 0.7)
 			: surface;
-		const auto lightSurface = Ui::CountContrast(base, Qt::black)
-			> Ui::CountContrast(base, Qt::white);
-		const auto background = Ui::BlendColors(
-			base,
-			lightSurface ? Qt::white : Qt::black,
-			isDown() ? 0.16 : isOver() ? 0.08 : 0.);
+		// Mokagram: use the gift's radial backdrop colors on the listening card.
+		const auto center = _giftCenterColor
+			? Ui::BlendColors(surface, *_giftCenterColor, 0.7)
+			: edge;
+		const auto contrast = [](QColor foreground, QColor edge, QColor center) {
+			return std::min(
+				Ui::CountContrast(edge, foreground),
+				Ui::CountContrast(center, foreground));
+		};
+		const auto lightSurface = contrast(Qt::black, edge, center)
+			> contrast(Qt::white, edge, center);
+		const auto stateTint = lightSurface ? Qt::white : Qt::black;
+		const auto stateOpacity = isDown() ? 0.16 : isOver() ? 0.08 : 0.;
+		const auto background = Ui::BlendColors(edge, stateTint, stateOpacity);
+		const auto centerBackground = Ui::BlendColors(center, stateTint, stateOpacity);
 		const auto primary = _profileColor
 			? QColor(lightSurface ? Qt::black : Qt::white)
 			: st::windowFg->c;
 		const auto muted = Ui::BlendColors(primary, background, 0.15);
 		const auto secondary = !_profileColor
 			? st::windowSubTextFg->c
-			: Ui::CountContrast(background, muted) >= 4.5
+			: contrast(muted, background, centerBackground) >= 4.5
 			? muted
 			: primary;
 		const auto cardRadius = std::min(
 			style::ConvertScale(Mokagram::BoxParts::kCardRadius),
 			std::min(width(), height()) / 2);
 		p.setPen(Qt::NoPen);
-		p.setBrush(background);
+		if (_giftCenterColor) {
+			auto gradient = QRadialGradient(QRectF(rect()).center(), width() / 2.);
+			gradient.setColorAt(0., centerBackground);
+			gradient.setColorAt(1., background);
+			p.setBrush(gradient);
+		} else {
+			p.setBrush(background);
+		}
 		p.drawRoundedRect(rect(), cardRadius, cardRadius);
 		const auto inset = style::ConvertScale(2);
 		if (hasFocus() && cardRadius > inset) {
@@ -1545,6 +1563,7 @@ private:
 	Mokagram::Music::Presence::Track _track;
 	QImage _cover;
 	std::optional<QColor> _profileColor;
+	std::optional<QColor> _giftCenterColor;
 };
 
 class DetailsFiller {

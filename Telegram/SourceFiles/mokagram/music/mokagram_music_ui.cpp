@@ -97,6 +97,7 @@
 #include "ui/ui_utility.h"
 #include "ui/power_saving.h"
 #include "ui/text/format_song_document_name.h"
+#include "ui/toast/toast.h"
 #include "ui/vertical_list.h"
 #include "styles/style_chat.h"
 #include "styles/style_window.h"
@@ -2030,9 +2031,17 @@ void PlayAll(const std::vector<Track> &tracks, bool skipUnavailable = false) {
 	PlayIndex(0, skipUnavailable);
 }
 
+bool ToggleTrackLike(
+	Track track,
+	not_null<Window::SessionController*> controller,
+	QWidget *source = nullptr);
+
 class TrackLikeButton final : public Ui::AbstractButton {
 public:
-	TrackLikeButton(QWidget *parent, Track track)
+	TrackLikeButton(
+		QWidget *parent,
+		not_null<Window::SessionController*> controller,
+		Track track)
 	: AbstractButton(parent)
 	, _track(std::move(track)) {
 		setPointerCursor(true);
@@ -2046,7 +2055,7 @@ public:
 		};
 		refresh();
 		LikesChanged() | rpl::on_next(refresh, lifetime());
-		setClickedCallback([=] { SetLiked(_track, !IsLiked(_track.id)); });
+		setClickedCallback([=] { ToggleTrackLike(_track, controller, this); });
 		paintRequest() | rpl::on_next([=](QRect) {
 			auto p = QPainter(this);
 			auto hq = PainterHighQualityEnabler(p);
@@ -2356,7 +2365,7 @@ public:
 			setDisabled(true);
 			setToolTip(unavailableText);
 		} else if (!_track.unavailable && !IsTelegramTrack(_track)) {
-			_likeButton = Ui::CreateChild<TrackLikeButton>(this, _track);
+			_likeButton = Ui::CreateChild<TrackLikeButton>(this, controller, _track);
 		}
 		if (_mode != RowMode::Home) {
 			_equalizerTimer.setInterval(33);
@@ -2659,7 +2668,7 @@ private:
 			add(IsLiked(track.id)
 				? QString::fromUtf8(Mokagram::Lang::Tr("Убрать из избранного"))
 				: QString::fromUtf8(Mokagram::Lang::Tr("В избранное")), [=] {
-				SetLiked(track, !IsLiked(track.id));
+				ToggleTrackLike(track, controller, this);
 			}, &st::menuIconFave);
 			AddToPlaylistMenu(_menu.get(), controller, track);
 		}
@@ -3415,7 +3424,7 @@ public:
 			const auto track = recentItem.track;
 			AddRadioAction(menu, controller, track);
 			menu->addAction(IsLiked(track.id) ? PlaylistText("Убрать из избранного") : PlaylistText("В избранное"), [=] {
-				SetLiked(track, !IsLiked(track.id));
+				ToggleTrackLike(track, controller, this);
 			}, &st::menuIconFave);
 			AddToPlaylistMenu(menu, controller, track);
 			menu->addAction(PlaylistText("Играть следующим"), [=] {
@@ -7159,10 +7168,7 @@ public:
 		const auto instance = Media::Player::instance();
 		_collapse->setClickedCallback([=] { close(); });
 		_heart->setClickedCallback([=] {
-			const auto track = PlayingTrack();
-			if (!track.id.isEmpty()) {
-				SetLiked(track, !IsLiked(track.id));
-			}
+			ToggleTrackLike(PlayingTrack(), _controller, this);
 		});
 		const auto step = [=](int delta) {
 			if (OwnsTrack(instance->current(AudioMsgId::Type::Song))) {
@@ -7348,6 +7354,12 @@ public:
 	[[nodiscard]] bool canReuse(
 			not_null<Window::SessionController*> controller) const {
 		return !_closing && _controller == controller;
+	}
+
+	[[nodiscard]] rpl::producer<int> likeToastOffset() const {
+		return _playbackBar->geometryValue() | rpl::map([=](QRect bar) {
+			return height() - bar.y();
+		});
 	}
 
 	void showHome() {
@@ -10623,6 +10635,79 @@ private:
 	return result;
 }
 
+bool ToggleTrackLike(
+		Track track,
+		not_null<Window::SessionController*> controller,
+		QWidget *source) {
+	if (track.id.isEmpty()) {
+		return false;
+	}
+	const auto fullscreen = FullscreenInstance();
+	const auto inFullscreen = fullscreen
+		&& fullscreen->canReuse(controller)
+		&& source
+		&& (source == fullscreen.data() || fullscreen->isAncestorOf(source));
+	const auto parent = QPointer<QWidget>(inFullscreen
+		? static_cast<QWidget*>(fullscreen.data())
+		: controller->widget()->bodyWidget());
+	const auto liked = !IsLiked(track.id);
+	if (!SetLiked(track, liked)) {
+		return false;
+	} else if (!liked || !parent || !parent->isVisible()) {
+		return true;
+	}
+
+	static auto lastToast = base::weak_ptr<Ui::Toast::Instance>();
+	if (const auto previous = lastToast.get()) {
+		previous->hide();
+	}
+	const auto s = [](int value) { return style::ConvertScale(value); };
+	auto icon = object_ptr<Ui::RpWidget>((QWidget*)nullptr);
+	const auto badge = icon.data();
+	badge->resize(s(28), s(28));
+	badge->setAttribute(Qt::WA_TransparentForMouseEvents);
+	badge->paintOn([=, pack = std::make_shared<std::shared_ptr<void>>()](QPainter &p) {
+		auto hq = PainterHighQualityEnabler(p);
+		p.setPen(Qt::NoPen);
+		p.setBrush(st::windowBgActive);
+		p.drawRoundedRect(badge->rect(), s(8), s(8));
+		Settings::PaintPackIcon(p, badge->rect(), u"💟"_q, *pack, badge);
+	});
+	Settings::RowIconsUpdated() | rpl::on_next([=] { badge->update(); }, badge->lifetime());
+
+	const auto undo = QString::fromUtf8(Mokagram::Lang::Tr("Отменить лайк"));
+	const auto actionWidth = st::defaultLinkButton.font->width(undo);
+	lastToast = Ui::Toast::Show(parent.data(), {
+		.text = { QString::fromUtf8(Mokagram::Lang::Tr("Трек добавлен в избранное")) },
+		.singleline = true,
+		.iconContent = std::move(icon),
+		.iconPadding = QMargins(s(12), s(8), s(10), s(8)),
+		.padding = rpl::single(QMargins(0, 0, actionWidth + s(14), 0)),
+		.st = &st::defaultToast,
+		.attach = RectPart::Bottom,
+		.addToAttachSide = inFullscreen ? fullscreen->likeToastOffset() : rpl::single(0),
+		.acceptinput = true,
+		.duration = crl::time(4000),
+	});
+	const auto toast = lastToast.get()->widget();
+	const auto action = Ui::CreateChild<Ui::LinkButton>(toast, undo);
+	action->setColorOverride(st::mediaviewTextLinkFg->c);
+	action->setFocusPolicy(Qt::TabFocus);
+	action->resizeToWidth(actionWidth);
+	action->setClickedCallback([=] { SetLiked(track, false); });
+	action->show();
+	toast->sizeValue() | rpl::on_next([=](QSize size) {
+		action->moveToRight(st::defaultToast.padding.right(),
+			(size.height() - action->height()) / 2, size.width());
+	}, toast->lifetime());
+	LikesChanged() | rpl::on_next([id = track.id, weak = lastToast] {
+		if (const auto active = weak.get(); active && !IsLiked(id)) {
+			active->hide();
+		}
+	}, toast->lifetime());
+	return true;
+}
+
 void ShowFullscreenPlayerAt(
 		not_null<Window::SessionController*> controller,
 		bool openHome) {
@@ -11571,7 +11656,7 @@ void ShowCurrentTrackMenu(
 	add(IsLiked(track.id)
 		? QString::fromUtf8(Mokagram::Lang::Tr("Убрать из избранного"))
 		: QString::fromUtf8(Mokagram::Lang::Tr("В избранное")), [=] {
-		SetLiked(track, !IsLiked(track.id));
+		ToggleTrackLike(track, controller, parent);
 	}, &st::menuIconFave);
 	if (!IsTelegramTrack(track)) {
 		add(QString::fromUtf8(Mokagram::Lang::Tr("Скачать")), [=] { SaveToDisk(track); }, &st::menuIconDownload);
@@ -11911,7 +11996,7 @@ void ShowPlayerBox(not_null<Window::SessionController*> controller) {
 			const auto track = PlayingTrack();
 			if (!track.id.isEmpty()) {
 				const auto liked = !IsLiked(track.id);
-				if (SetLiked(track, liked)) {
+				if (ToggleTrackLike(track, controller, heart)) {
 					heart->animateLike(liked);
 				}
 			}

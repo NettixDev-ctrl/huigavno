@@ -1594,6 +1594,8 @@
 	{ "Плейлисты из аккаунта SoundCloud", "Playlists from the SoundCloud account" },
 	{ "Понравившиеся треки SoundCloud", "SoundCloud liked tracks" },
 	{ "Избранное: %1", "Liked: %1" },
+	{ "Трек добавлен в избранное", "Added to Liked Songs" },
+	{ "Отменить лайк", "Undo like" },
 	{ "Слишком много плейлистов для синхронизации.", "Too many playlists to sync." },
 	{ "Список плейлистов обрезан по лимиту.", "Playlist list was truncated at the safety limit." },
 	{ "Список лайков обрезан по лимиту.", "Liked tracks were truncated at the safety limit." },

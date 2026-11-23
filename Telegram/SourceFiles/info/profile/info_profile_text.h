@@ -21,6 +21,9 @@ class VerticalLayout;
 class FlatLabel;
 template <typename Widget>
 class SlideWrap;
+namespace Text {
+struct MarkedContext;
+} // namespace Text
 } // namespace Ui
 
 namespace Info {
@@ -39,7 +42,8 @@ TextWithLabel CreateTextWithLabel(
 	const style::FlatLabel &labelSt,
 	const style::FlatLabel &textSt,
 	const style::margins &padding,
-	const style::PopupMenu &stMenu = st::defaultPopupMenu);
+	const style::PopupMenu &stMenu = st::defaultPopupMenu,
+	Ui::Text::MarkedContext context = {});
 
 } // namespace Profile
 } // namespace Info

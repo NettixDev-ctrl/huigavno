@@ -34,6 +34,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/unread_badge_paint.h"
 #include "ui/ui_utility.h"
 #include "core/application.h"
+#include "core/ui_integration.h" // TextContext: глаза стримера в кастомных эмодзи.
 #include "core/click_handler_types.h"
 #include "core/core_settings.h"
 #include "chat_helpers/emoji_suggestions_widget.h"
@@ -415,7 +416,8 @@ not_null<Ui::SettingsButton*> AddRow(
 		bool markedValue = false,
 		Fn<void(not_null<Ui::PopupMenu*>)> menuExtender = nullptr,
 		const style::icon *copyIcon = nullptr,
-		Fn<void(const QString &)> copyAction = nullptr) {
+		Fn<void(const QString &)> copyAction = nullptr,
+		Ui::Text::MarkedContext context = {}) {
 	const auto wrap = markedValue
 		? AddButtonWithIcon(
 			container,
@@ -435,7 +437,8 @@ not_null<Ui::SettingsButton*> AddRow(
 			wrap,
 			rpl::duplicate(value),
 			st::settingsButton,
-			rpl::duplicate(label));
+			rpl::duplicate(label),
+			std::move(context));
 	}
 	const auto forcopy = Ui::CreateChild<QString>(wrap.get());
 	wrap->setAcceptBoth();
@@ -676,7 +679,8 @@ void SetupRows(
 			} else {
 				QGuiApplication::clipboard()->setText(shown);
 			}
-		});
+		},
+		Core::TextContext({ .session = session }));
 	if (targets) {
 		targets->phone = phoneButton;
 	}

@@ -26,7 +26,8 @@ TextWithLabel CreateTextWithLabel(
 		const style::FlatLabel &labelSt,
 		const style::FlatLabel &textSt,
 		const style::margins &padding,
-		const style::PopupMenu &stMenu) {
+		const style::PopupMenu &stMenu,
+		Ui::Text::MarkedContext context) {
 	auto result = object_ptr<Ui::SlideWrap<Ui::VerticalLayout>>(
 		parent,
 		object_ptr<Ui::VerticalLayout>(parent),
@@ -50,7 +51,8 @@ TextWithLabel CreateTextWithLabel(
 		layout,
 		std::move(nonEmptyText),
 		textSt,
-		stMenu));
+		stMenu,
+		std::move(context)));
 	std::move(text) | rpl::on_next([=] {
 		labeled->resizeToWidth(layout->widthNoMargins());
 	}, labeled->lifetime());

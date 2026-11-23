@@ -150,7 +150,8 @@ rpl::producer<TextWithEntities> PhoneValue(not_null<UserData*> user) {
 	) | rpl::map([=](rpl::empty_value, bool hide) {
 		auto phone = Ui::FormatPhone(user->phone());
 		if (hide && user->isSelf()) {
-			phone = Mokagram::Streamer::Mask(
+			// Режим стримера: глаза вместо точек.
+			return Mokagram::Streamer::MaskWithEmoji(
 				Mokagram::Streamer::Field::Phone,
 				phone);
 		}
@@ -249,11 +250,11 @@ rpl::producer<TextWithEntities> UsernameValue(
 			return tr::marked();
 		}
 		auto shown = '@' + username;
-		return tr::marked((hide && peer->isSelf())
-			? Mokagram::Streamer::Mask(
+		return (hide && peer->isSelf())
+			? Mokagram::Streamer::MaskWithEmoji(
 				Mokagram::Streamer::Field::Username,
 				shown)
-			: shown);
+			: tr::marked(shown);
 	});
 }
 
@@ -283,7 +284,7 @@ rpl::producer<std::vector<TextWithEntities>> UsernamesValue(
 		) | ranges::views::transform([&](const QString &u) {
 			auto link = tr::link(u, UsernameUrl(peer, u));
 			return hide
-				? Mokagram::Streamer::Mask(
+				? Mokagram::Streamer::MaskWithEmoji(
 					Mokagram::Streamer::Field::Username,
 					std::move(link))
 				: link;

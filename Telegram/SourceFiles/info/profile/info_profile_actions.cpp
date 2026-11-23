@@ -1931,6 +1931,11 @@ Section DetailsFiller::makeInfo() {
 	const auto paintSeparator = [](not_null<Ui::RpWidget*>) {};
 
 	Ui::SlideWrap<Ui::RpWidget> *lastLineOuter = nullptr;
+	// Контекст с фабрикой кастомных эмодзи: так глаза режима стримера
+	// рисуются точно так же, как Telegram рисует свои кастомные эмодзи.
+	const auto emojiContext = Core::TextContext({
+		.session = &_peer->session(),
+	});
 	const auto addInfoLineGeneric = [&](
 			v::text::data &&label,
 			rpl::producer<TextWithEntities> &&text,
@@ -1948,7 +1953,8 @@ Section DetailsFiller::makeInfo() {
 				padding.top() - 2,
 				padding.right(),
 				padding.bottom() - 2),
-			stMenu);
+			stMenu,
+			emojiContext);
 		{
 			const auto raw = line.wrap.data();
 			const auto outer = result->add(
@@ -2141,11 +2147,11 @@ Section DetailsFiller::makeInfo() {
 				Mokagram::Streamer::ActiveValue(
 					Mokagram::Streamer::Field::Id
 				) | rpl::map([=](bool hide) {
-					return tr::marked((hide && user->isSelf())
-						? Mokagram::Streamer::Mask(
+					return (hide && user->isSelf())
+						? Mokagram::Streamer::MaskWithEmoji(
 							Mokagram::Streamer::Field::Id,
 							raw)
-						: raw);
+						: tr::marked(raw);
 				}),
 				QString::fromUtf8(Mokagram::Lang::Tr("Копировать ID")));
 			{

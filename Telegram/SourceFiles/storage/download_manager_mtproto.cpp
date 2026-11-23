@@ -17,6 +17,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "apiwrap.h"
 #include "base/openssl_help.h"
 
+#include <map>
+
 namespace Storage {
 namespace {
 
@@ -44,6 +46,39 @@ constexpr auto kMaxTrackedSuccesses = kRetryAddSessionSuccesses
 constexpr auto kRemoveSessionAfterTimeouts = 4;
 constexpr auto kResetDownloadPrioritiesTimeout = crl::time(200);
 constexpr auto kBadRequestDurationThreshold = 8 * crl::time(1000);
+// Mokagram: Telegram rejects some stale external preview URLs immediately.
+// Retrying each one for every visible chat item floods the download queue.
+constexpr auto kUnavailableWebFileCooldown = 5 * crl::time(60 * 1000);
+
+[[nodiscard]] std::map<QString, crl::time> &UnavailableWebFiles() {
+	static auto result = std::map<QString, crl::time>();
+	return result;
+}
+
+[[nodiscard]] QString WebFileKey(const WebFileLocation &location) {
+	return QString::fromLatin1(location.url());
+}
+
+[[nodiscard]] bool WebFileCoolingDown(const WebFileLocation &location) {
+	const auto now = crl::now();
+	auto &failed = UnavailableWebFiles();
+	const auto i = failed.find(WebFileKey(location));
+	if (i == end(failed)) {
+		return false;
+	} else if (i->second > now) {
+		return true;
+	}
+	failed.erase(i);
+	return false;
+}
+
+void MarkWebFileUnavailable(const WebFileLocation &location) {
+	auto &failed = UnavailableWebFiles();
+	failed[WebFileKey(location)] = crl::now() + kUnavailableWebFileCooldown;
+	if (failed.size() > 512) {
+		failed.erase(begin(failed));
+	}
+}
 
 // Each (session remove by timeouts) we wait for time:
 // kRetryAddSessionTimeout * max(removesCount, kMaxTrackedSessionRemoves)
@@ -607,6 +642,11 @@ bool DownloadMtprotoTask::setWebFileSizeHook(int64 size) {
 }
 
 void DownloadMtprotoTask::makeRequest(const RequestData &requestData) {
+	if (const auto location = std::get_if<WebFileLocation>(&_location.data);
+			location && WebFileCoolingDown(*location)) {
+		cancelOnFail();
+		return;
+	}
 	placeSentRequest(sendRequest(requestData), requestData);
 }
 
@@ -960,6 +1000,11 @@ bool DownloadMtprotoTask::normalPartFailed(
 bool DownloadMtprotoTask::partFailed(
 		const MTP::Error &error,
 		mtpRequestId requestId) {
+	if (error.type() == u"WEBFILE_NOT_AVAILABLE"_q) {
+		if (const auto location = std::get_if<WebFileLocation>(&_location.data)) {
+			MarkWebFileUnavailable(*location);
+		}
+	}
 	if (MTP::IsDefaultHandledError(error)) {
 		return false;
 	}

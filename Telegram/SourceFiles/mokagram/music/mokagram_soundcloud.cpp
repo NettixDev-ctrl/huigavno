@@ -976,6 +976,8 @@ rpl::producer<> CoversChanged() {
 }
 
 uint64 DocumentIdForTrack(const QString &trackId) {
+	constexpr auto kPrefix = 0x4D4F4B0000000000ULL;
+	constexpr auto kIdMask = (1ULL << 40) - 1;
 	auto id = trackId.toULongLong();
 	if (!id && trackId.startsWith(u"yt:"_q)) {
 		// У ролика YouTube Music нет числового SoundCloud id: берём
@@ -985,13 +987,12 @@ uint64 DocumentIdForTrack(const QString &trackId) {
 			hash ^= uchar(byte);
 			hash *= 1099511628211ULL;
 		}
-		id = hash & ((1ULL << 56) - 1);
+		id = hash & kIdMask;
 	}
-	// Префикс занимает старшие биты: слишком длинный id переполнит сумму.
-	if (id >= (1ULL << 56)) {
+	if (id > kIdMask) {
 		return 0;
 	}
-	return 0x4D4F4B0000000000ULL + id;
+	return kPrefix | id;
 }
 
 namespace {

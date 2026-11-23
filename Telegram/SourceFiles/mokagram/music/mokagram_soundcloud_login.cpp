@@ -634,6 +634,18 @@ void ShowSoundCloudLogin(Fn<void()> onLoggedIn, Fn<void()> onClosed) {
 
 #if defined Q_OS_LINUX || defined Q_OS_MAC
 		const auto python = Python3Executable();
+		const auto openBrowserFallback = [=](bool retryAutoLogin) {
+			*busy = false;
+			if (!OpenSoundCloudInBrowser()) {
+				setStatus(Tr("Не получилось запустить браузер. Токен можно ввести вручную."));
+			} else if (retryAutoLogin) {
+				setStatus(Tr("В браузере нет входа в SoundCloud. Войдите на soundcloud.com и нажмите ещё раз."));
+				return;
+			} else {
+				setStatus(Tr("Автовход не сработал. Войдите в SoundCloud в браузере и введите токен вручную."));
+			}
+			manual->toggle(true, anim::type::normal);
+		};
 		const auto autoLogin = [=] {
 			*busy = true;
 			setStatus(Tr("Ищу вход в браузере…"));
@@ -653,7 +665,9 @@ void ShowSoundCloudLogin(Fn<void()> onLoggedIn, Fn<void()> onClosed) {
 				});
 			});
 			timeout->start(40 * 1000);
-			QObject::connect(process, &QProcess::finished, process, [=](int code) {
+			QObject::connect(process, &QProcess::finished, process, [=](
+					int code,
+					QProcess::ExitStatus exitStatus) {
 				const auto output = QString::fromUtf8(
 					process->readAllStandardOutput());
 				process->deleteLater();
@@ -686,15 +700,9 @@ void ShowSoundCloudLogin(Fn<void()> onLoggedIn, Fn<void()> onClosed) {
 					login(token);
 					return;
 				}
-				*busy = false;
-				if (code == 2) {
-					setStatus(Tr("В браузере нет входа в SoundCloud. Войдите на soundcloud.com и нажмите ещё раз."));
-					if (OpenSoundCloudInBrowser()) {
-						return;
-					}
-				}
-				setStatus(Tr("Не получилось запустить браузер. Токен можно ввести вручную."));
-				manual->toggle(true, anim::type::normal);
+				openBrowserFallback(!*timedOut
+					&& exitStatus == QProcess::NormalExit
+					&& code == 2);
 			});
 			QObject::connect(process, &QProcess::errorOccurred, process, [=](QProcess::ProcessError error) {
 				if (error != QProcess::FailedToStart) {
@@ -706,9 +714,7 @@ void ShowSoundCloudLogin(Fn<void()> onLoggedIn, Fn<void()> onClosed) {
 				if (!guarded) {
 					return;
 				}
-				*busy = false;
-				setStatus(Tr("Не получилось запустить браузер. Токен можно ввести вручную."));
-				manual->toggle(true, anim::type::normal);
+				openBrowserFallback(false);
 			});
 			process->start();
 		};
@@ -731,13 +737,13 @@ void ShowSoundCloudLogin(Fn<void()> onLoggedIn, Fn<void()> onClosed) {
 #if defined Q_OS_LINUX || defined Q_OS_MAC
 			if (!python.isEmpty()) {
 				autoLogin();
-				return;
+			} else {
+				openBrowserFallback(false);
 			}
-			setStatus(Tr("Нужен python3. Токен можно ввести вручную."));
 #else // Q_OS_LINUX || Q_OS_MAC
 			setStatus(Tr("Автовход пока только на Linux и macOS. Введите токен вручную."));
-#endif // Q_OS_LINUX || Q_OS_MAC
 			manual->toggle(true, anim::type::normal);
+#endif // Q_OS_LINUX || Q_OS_MAC
 		};
 		field->submits() | rpl::on_next(submit, field->lifetime());
 

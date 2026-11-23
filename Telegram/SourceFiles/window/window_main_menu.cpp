@@ -1313,6 +1313,9 @@ MainMenu::MainMenu(
 , _telegram(
 	Ui::CreateChild<Ui::FlatLabel>(_footer.get(), st::mainMenuTelegramLabel))
 , _version(AddVersionLabel(_footer)) {
+	// Mokagram: keep the pixels outside the rounded right corners transparent
+	// both on screen and in the cached opening animation.
+	setAttribute(Qt::WA_TranslucentBackground);
 	setProperty("moka-main-menu", true);
 
 	// Режим стримера: имя в шапке рисуется без rpl, сбрасываем кэш текста.

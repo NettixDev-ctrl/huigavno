@@ -7341,6 +7341,10 @@ public:
 		}, lifetime());
 		instance->updatedNotifier(
 		) | rpl::on_next([=] { refresh(); }, lifetime());
+		instance->tracksFinished(
+		) | rpl::filter([=](AudioMsgId::Type type) {
+			return type == AudioMsgId::Type::Song && !instance->current(type).audio();
+		}) | rpl::on_next([=] { refresh(); }, lifetime());
 		QueueState().changes.events(
 		) | rpl::on_next([=] { refresh(); }, lifetime());
 		CoversChanged() | rpl::on_next([=] { refresh(); }, lifetime());
@@ -7433,6 +7437,10 @@ public:
 
 		PowerSaving::Changes(
 		) | rpl::on_next([=] {
+			if (PowerSaving::On(PowerSaving::kAnimations) && _barSlide.animating()) {
+				_barSlide.stop();
+				layoutPlaybackBar(computeLayout());
+			}
 			updateAmbientTimer();
 			repaintBackdrop();
 		}, lifetime());
@@ -7663,11 +7671,12 @@ protected:
 		bool verticalNav = false;
 		bool compact = false;
 		bool ultra = false;
-		bool barShown = true;
+		bool barShown = false;
 		QRect nav;
 		QRect homeBack;
 		QRect center;
 		QRect bar;
+		int contentBottom = 0;
 		int scrollTop = 0;
 		QRect cover;
 		QRect info;
@@ -7696,15 +7705,19 @@ protected:
 		const auto gap = s(12);
 		const auto pad = s(16);
 		const auto now = (_tab == Tab::Now);
-		result.barShown = true;
 		// Толстая капсула как у островка: по центру, не на всю ширину.
 		const auto barHeight = s(kBarHeight);
 		const auto barWidth = std::max(
 			std::min(width() - 2 * margin, s(kBarMaxWidth)),
 			0);
+		const auto barProgress = _barSlide.value(_hasPlaybackTrack ? 1. : 0.);
+		result.barShown = _hasPlaybackTrack || barProgress > 0.;
+		// Список меняет размер один раз, каждый кадр двигается сама панель.
+		result.contentBottom = height() - gap
+			- (_hasPlaybackTrack ? margin + barHeight : 0);
 		result.bar = QRect(
 			(width() - barWidth) / 2,
-			height() - margin - barHeight,
+			height() - int(base::SafeRound((margin + barHeight) * barProgress)),
 			barWidth,
 			barHeight);
 
@@ -7730,7 +7743,7 @@ protected:
 			result.homeBack = back;
 		}
 		const auto top = result.nav.y() + result.nav.height() + gap;
-		const auto areaBottom = result.bar.y() - gap;
+		const auto areaBottom = result.contentBottom;
 		const auto areaHeight = std::max(areaBottom - top, 0);
 		const auto queueWidth = std::min(
 			std::max(width() - 2 * margin, 0),
@@ -7793,7 +7806,7 @@ protected:
 				+ (_tab == Tab::Search ? searchHeaderHeight(contentWidth) : 0);
 		}
 
-		// Внизу: постоянная полоса управления.
+		// Внизу: полоса управления воспроизведением.
 		const auto &bar = result.bar;
 		// Обложка концентрична капсуле: одинаковый отступ сверху, снизу и слева.
 		const auto barInset = (bar.height() - s(kBarCover)) / 2;
@@ -7929,8 +7942,7 @@ protected:
 		const auto s = [](int v) { return style::ConvertScale(v); };
 		const auto layout = computeLayout();
 		const auto barOrigin = layout.bar.topLeft();
-		_playbackBar->setGeometry(layout.bar);
-		_playbackBar->setVisible(layout.barShown);
+		layoutPlaybackBar(layout);
 		_collapse->move(layout.collapse);
 		_filter->move(style::ConvertScale(16), layout.collapse.y());
 		if (_homeBackOverlay && (!layout.homeBack.isEmpty() || e->size() != e->oldSize())) {
@@ -7966,7 +7978,7 @@ protected:
 		const auto scrollBottom = home ? height() : layout.center.bottom() + 1 - s(12);
 		// Последнюю карточку можно прокрутить целиком выше плеера.
 		_tabContent->setPadding(QMargins(
-			0, 0, 0, home ? height() - layout.bar.y() + s(12) : 0));
+			0, 0, 0, home && _hasPlaybackTrack ? height() - layout.contentBottom : 0));
 		_tabScroll->setGeometry(
 			layout.center.x(),
 			layout.scrollTop,
@@ -8059,6 +8071,35 @@ protected:
 		auto event = QResizeEvent(size(), size());
 		resizeEvent(&event);
 		update();
+	}
+
+	void layoutPlaybackBar(const Layout &layout) {
+		const auto previous = _playbackBar->geometry();
+		_playbackBar->setGeometry(layout.bar);
+		_playbackBar->setVisible(layout.barShown);
+		if (_tab != Tab::Home && previous != layout.bar) {
+			update(previous.united(layout.bar));
+		}
+	}
+
+	void setPlaybackBarShown(bool shown) {
+		if (_hasPlaybackTrack == shown) {
+			return;
+		}
+		const auto from = _barSlide.value(_hasPlaybackTrack ? 1. : 0.);
+		_hasPlaybackTrack = shown;
+		if (!isVisible() || anim::Disabled() || PowerSaving::On(PowerSaving::kAnimations)) {
+			_barSlide.stop();
+		} else {
+			_barSlide.start([this] {
+				layoutPlaybackBar(computeLayout());
+			}, from, shown ? 1. : 0., 240, anim::easeOutCubic);
+		}
+		if (!shown && _queuePanelOpen) {
+			setQueuePanelOpen(false);
+		} else {
+			relayout();
+		}
 	}
 
 	[[nodiscard]] double navColumn(int index, int columns) const {
@@ -8562,7 +8603,7 @@ protected:
 			0,
 			transitionTop,
 			width(),
-			std::max(oldLayout.bar.y() - style::ConvertScale(12) - transitionTop, 0));
+			std::max(oldLayout.contentBottom - transitionTop, 0));
 		auto was = animateTransition
 			? Ui::GrabWidget(this, transitionArea)
 			: QPixmap();
@@ -10441,6 +10482,7 @@ private:
 		if (_closing) {
 			return;
 		}
+		setPlaybackBarShown(!track.id.isEmpty());
 		if (track.id.isEmpty()) {
 			if (_isPlaying) repaintBackdrop();
 			_isPlaying = false;
@@ -10453,7 +10495,6 @@ private:
 			_motionCover = nullptr;
 			_spotifyCanvas = nullptr;
 			_canvas.refresh({}, {}, {}, false);
-			// Между треками плеер на миг пуст: экран остаётся, закрывает его пользователь.
 			return;
 		}
 		const auto instance = Media::Player::instance();
@@ -10606,6 +10647,8 @@ private:
 	bool _queuePanelOpen = false;
 	Ui::Animations::Simple _queueSlide;
 	const not_null<Ui::RpWidget*> _playbackBar;
+	bool _hasPlaybackTrack = false;
+	Ui::Animations::Simple _barSlide;
 	const not_null<SeekBar*> _seek;
 	const not_null<RoundGlyph*> _heart;
 	const not_null<RoundGlyph*> _collapse;

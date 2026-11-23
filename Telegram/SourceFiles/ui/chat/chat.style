@@ -1273,7 +1273,14 @@ lowTonText: FlatLabel(defaultFlatLabel) {
 }
 
 groupMembersWidgetList: PeerList(defaultPeerList) {
+	// Mokagram: member rows belong to the same surface as their dropdown,
+	// without a darker rectangle behind the list.
+	bg: menuBg;
 	item: PeerListItem(defaultPeerListItem) {
+		button: OutlineButton(defaultPeerListButton) {
+			textBg: menuBg;
+			textBgOver: windowBgOver;
+		}
 		photoPosition: point(12px, 6px);
 		namePosition: point(68px, 11px);
 		statusPosition: point(68px, 31px);

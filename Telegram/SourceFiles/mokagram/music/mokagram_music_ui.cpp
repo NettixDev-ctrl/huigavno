@@ -538,6 +538,40 @@ void ChatMusicSearch::searchMore() {
 	return result;
 }
 
+void LoadQueuePlaybackCover(uint64 documentId, const Track &track) {
+	const auto updateCover = [=](QImage image) {
+		if (image.isNull()) {
+			return;
+		}
+		const auto previous = CoverForDocument(documentId);
+		if (std::min(image.width(), image.height())
+			<= std::min(previous.width(), previous.height())) {
+			return;
+		}
+		SetCover(documentId, std::move(image));
+		QueueState().changes.fire({});
+	};
+	const auto preview = ArtUrl(track.artworkUrl, u"t500x500"_q);
+	LoadImage(preview, updateCover);
+
+	auto url = QUrl(preview);
+	if (!url.host().endsWith(u".googleusercontent.com"_q)) {
+		return;
+	}
+	static const auto dimensions = QRegularExpression(
+		u"=(?:w[0-9]+-h[0-9]+|s[0-9]+)(?=-|$)"_q);
+	auto path = url.path();
+	if (!path.contains(dimensions)) {
+		return;
+	}
+	path.replace(dimensions, u"=s1024"_q);
+	url.setPath(path);
+	const auto large = url.toString(QUrl::FullyEncoded);
+	if (large != preview) {
+		LoadImage(large, updateCover);
+	}
+}
+
 // Mokagram: один поиск SoundCloud-двойника локальной песни, без точного совпадения пустой Track.
 void ResolveLocalSoundCloud(const Track &track, Fn<void(Track)> done) {
 	using Key = std::pair<QString, QString>;
@@ -837,10 +871,7 @@ void CommitRadio(
 		queue.current = seed;
 		queue.recorded = false;
 		const auto document = MakeDocument(&controller->session(), seed, path);
-		LoadImage(ArtUrl(seed.artworkUrl, u"t500x500"_q), [id = document->id](QImage image) {
-			SetCover(id, std::move(image));
-			QueueState().changes.fire({});
-		});
+		LoadQueuePlaybackCover(document->id, seed);
 		Media::Player::instance()->play(
 			AudioMsgId(document, FullMsgId()),
 			std::nullopt);
@@ -1220,10 +1251,7 @@ void PlayIndex(int index, bool skipUnavailable) {
 	}
 	const auto playDocument = [](not_null<DocumentData*> document, const Track &resolved) {
 		auto &queue = QueueState();
-		LoadImage(ArtUrl(resolved.artworkUrl, u"t500x500"_q), [id = document->id](QImage image) {
-			SetCover(id, std::move(image));
-			QueueState().changes.fire({});
-		});
+		LoadQueuePlaybackCover(document->id, resolved);
 		queue.current = resolved;
 		queue.recorded = false;
 		Media::Player::instance()->play(AudioMsgId(document, FullMsgId()), std::nullopt);
@@ -10535,14 +10563,12 @@ private:
 			_title = track.title;
 			_artist = track.artist;
 			_coverKey = coverKey;
-			const auto size = 512;
-			_cover = cover.isNull()
-				? QPixmap()
-				: QPixmap::fromImage(cover.scaled(
-					size,
-					size,
-					Qt::KeepAspectRatioByExpanding,
-					Qt::SmoothTransformation));
+			constexpr auto kMaxCoverSize = 1280;
+			_cover = QPixmap::fromImage(
+				std::max(cover.width(), cover.height()) > kMaxCoverSize
+					? cover.scaled(kMaxCoverSize, kMaxCoverSize,
+						Qt::KeepAspectRatio, Qt::SmoothTransformation)
+					: cover);
 			if (_canvasBackground.isNull()) _accent = CurrentCoverAccent();
 			_nav[0]->setActiveColor(Qt::white);
 			// Полоса управления плавно перекрашивается под обложку трека.

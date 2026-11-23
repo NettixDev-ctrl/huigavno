@@ -1605,6 +1605,8 @@
 	{ "Weekly Wave", "Weekly Wave" },
 	{ "Trending", "Trending" },
 	{ "Скрыть Trending на главной", "Hide Trending on Home" },
+	{ "Скрывать треки из YouTube Music", "Hide tracks from YouTube Music" },
+	{ "Для раздела «Популярное» на странице исполнителя.", "Applies to the Popular section on artist pages." },
 	{ "Daily Drops", "Daily Drops" },
 	{ "SoundCloud не вернул подборки для этого аккаунта.", "SoundCloud returned no playlists for this account." },
 	{ "Нет доступной музыки в этой подборке.", "No playable music in this collection." },

@@ -249,6 +249,13 @@ void RegisterSettings() {
 		.defaultValue = false,
 	});
 	playerEntry({
+		.key = u"player.hide_youtube_fallback"_q,
+		.title = QString::fromUtf8(Lang::Tr("Скрывать треки из YouTube Music")),
+		.description = QString::fromUtf8(Lang::Tr("Для раздела «Популярное» на странице исполнителя.")),
+		.kind = S::Kind::Bool,
+		.defaultValue = false,
+	});
+	playerEntry({
 		.key = u"music.hint_sticker"_q,
 		.title = u"music.hint_sticker"_q,
 		.kind = S::Kind::String,

@@ -3604,6 +3604,9 @@ private:
 		const std::vector<Track> &tracks,
 		const std::vector<Track> &youtube) {
 	auto result = tracks;
+	if (Settings::Bool(u"player.hide_youtube_fallback"_q)) {
+		return result;
+	}
 	for (const auto &track : youtube) {
 		const auto known = std::ranges::any_of(result, [&](const Track &other) {
 			return SameHomeTrack(track, other);
@@ -7173,6 +7176,17 @@ public:
 		LyricsAvailabilityChanges() | rpl::on_next([=] { relayout(); }, lifetime());
 		Mokagram::Settings::Changed() | rpl::on_next([=](const QString &key) {
 			if (key == u"lyrics.comments"_q) relayout();
+			if (key == u"player.hide_youtube_fallback"_q) {
+				if (_homeArtistOpen) {
+					if (_tab == Tab::Home) {
+						rebuildTab();
+					}
+					if (_homeArtistYouTubeDeferred && !Settings::Bool(key)) {
+						loadHomeArtistYouTube(_homeAlbumGeneration);
+					}
+				}
+				return;
+			}
 			if (key == u"player.hide_trending"_q) {
 				const auto closeTrending = (_homeSection == kHomeTrendingSection)
 					&& Mokagram::Settings::Bool(key);
@@ -8496,6 +8510,26 @@ protected:
 		}));
 	}
 
+	void loadHomeArtistYouTube(int generation) {
+		if (!_homeArtistOpen || _homeArtistProfile.name.isEmpty()) {
+			return;
+		}
+		_homeArtistYouTubeDeferred = Settings::Bool(u"player.hide_youtube_fallback"_q);
+		if (_homeArtistYouTubeDeferred) {
+			return;
+		}
+		// SoundCloud ничего не дал: популярное добираем из YouTube Music.
+		LoadArtistTracks(_homeArtistProfile.name, 12, crl::guard(this, [=](std::vector<Track> found) {
+			if (generation != _homeAlbumGeneration || !_homeArtistOpen) {
+				return;
+			}
+			_homeArtistYouTubeTracks = std::move(found);
+			if (_tab == Tab::Home && !Settings::Bool(u"player.hide_youtube_fallback"_q)) {
+				rebuildTab();
+			}
+		}));
+	}
+
 	void loadHomeArtist(
 			const QString &name,
 			const QString &artistId,
@@ -8505,24 +8539,10 @@ protected:
 		_homeArtistAlbums.clear();
 		_homeArtistTracks.clear();
 		_homeArtistYouTubeTracks.clear();
+		_homeArtistYouTubeDeferred = false;
 		if (_homeArtistOpen && !_homeArtistSeed.id.isEmpty()) {
 			_homeArtistTracks.push_back(_homeArtistSeed);
 		}
-		const auto loadYouTube = [=] {
-			if (!_homeArtistOpen || name.isEmpty()) {
-				return;
-			}
-			// SoundCloud ничего не дал: популярное добираем из YouTube Music.
-			LoadArtistTracks(name, 12, crl::guard(this, [=](std::vector<Track> found) {
-				if (generation != _homeAlbumGeneration || !_homeArtistOpen) {
-					return;
-				}
-				_homeArtistYouTubeTracks = std::move(found);
-				if (_tab == Tab::Home && _homeAlbumOpen) {
-					rebuildTab();
-				}
-			}));
-		};
 		if (!name.isEmpty()) {
 			SearchAlbums(name, 20, crl::guard(this, [=](std::vector<Album> albums, QString error) {
 				if (generation != _homeAlbumGeneration) {
@@ -8556,7 +8576,7 @@ protected:
 						}));
 				});
 				if (_homeArtistOpen && tracks.empty()) {
-					loadYouTube();
+					loadHomeArtistYouTube(generation);
 				}
 				if (_homeArtistOpen) {
 					if (tracks.empty() && !_homeArtistSeed.id.isEmpty()) {
@@ -8572,7 +8592,7 @@ protected:
 				}
 			}));
 		} else {
-			loadYouTube();
+			loadHomeArtistYouTube(generation);
 		}
 	}
 
@@ -10375,6 +10395,7 @@ private:
 	std::vector<Track> _homeAlbumTracks;
 	std::vector<Track> _homeArtistTracks;
 	std::vector<Track> _homeArtistYouTubeTracks;
+	bool _homeArtistYouTubeDeferred = false;
 	std::vector<Album> _homeArtistAlbums;
 	QString _homeArtistBannerUrl;
 	DiscographyFilter _discographyFilter = DiscographyFilter::All;

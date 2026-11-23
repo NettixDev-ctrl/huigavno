@@ -22,6 +22,11 @@ void LoadArtistTracks(
 	int limit,
 	Fn<void(std::vector<Track>)> done);
 
+// Рекомендации YouTube Music для трека с известным videoId.
+void LoadYouTubeMusicRecommendations(
+	const QString &videoId,
+	Fn<void(std::vector<Track>)> done);
+
 // Запускается в главном потоке. Возвращает путь к аудио в кэше.
 // Скачанный файл живёт в общем LRU кэше аудио, повторные запросы объединяются.
 void DownloadYouTubeMusic(

@@ -229,11 +229,7 @@ void FindSong(const QJsonValue &value, const QString &title, const QString &arti
 	return valid.match(id).hasMatch() ? id : QString();
 }
 
-[[nodiscard]] QString RowThumbnail(const QJsonObject &row) {
-	const auto list = row.value("thumbnail").toObject()
-		.value("musicThumbnailRenderer").toObject()
-		.value("thumbnail").toObject()
-		.value("thumbnails").toArray();
+[[nodiscard]] QString LargestThumbnail(const QJsonArray &list) {
 	auto result = QString();
 	auto bestWidth = -1;
 	for (const auto &value : list) {
@@ -246,6 +242,19 @@ void FindSong(const QJsonValue &value, const QString &title, const QString &arti
 		}
 	}
 	return result;
+}
+
+[[nodiscard]] Track CatalogTrack(const QString &id, QString thumbnail) {
+	if (thumbnail.isEmpty()) {
+		thumbnail = u"https://i.ytimg.com/vi/"_q + id + u"/hqdefault.jpg"_q;
+	}
+	auto track = Track();
+	track.id = u"yt:"_q + id;
+	track.videoId = id;
+	track.artworkUrl = std::move(thumbnail);
+	track.permalink = QString::fromLatin1(kOrigin) + u"/watch?v="_q + id;
+	track.unavailable = true;
+	return track;
 }
 
 void CollectArtistSongs(
@@ -339,16 +348,12 @@ void CollectArtistSongs(
 	if (known) {
 		return;
 	}
-	auto track = Track();
-	track.id = u"yt:"_q + id;
-	track.videoId = id;
+	auto track = CatalogTrack(id, LargestThumbnail(row.value("thumbnail").toObject()
+		.value("musicThumbnailRenderer").toObject()
+		.value("thumbnail").toObject()
+		.value("thumbnails").toArray()));
 	track.title = title.trimmed();
 	track.artist = credits.empty() ? firstCredit : credits.join(u", "_q);
-	track.artworkUrl = RowThumbnail(row);
-	if (track.artworkUrl.isEmpty()) {
-		track.artworkUrl = u"https://i.ytimg.com/vi/"_q + id + u"/hqdefault.jpg"_q;
-	}
-	track.permalink = QString::fromLatin1(kOrigin) + u"/watch?v="_q + id;
 	track.durationMs = duration * 1000;
 	// Счётчик бывает в отдельной колонке метаданных после имени исполнителя.
 	for (auto column = 1; column < columns.size() && !track.playbackCount; ++column) {
@@ -363,8 +368,64 @@ void CollectArtistSongs(
 		}
 	}
 	track.uploaderName = artist;
-	track.unavailable = true;
 	result.push_back(std::move(track));
+}
+
+[[nodiscard]] std::vector<Track> ParseRecommendations(const QJsonObject &response) {
+	const auto tabs = response.value("contents").toObject()
+		.value("singleColumnMusicWatchNextResultsRenderer").toObject()
+		.value("tabbedRenderer").toObject()
+		.value("watchNextTabbedResultsRenderer").toObject().value("tabs").toArray();
+	const auto rows = tabs.at(0).toObject().value("tabRenderer").toObject()
+		.value("content").toObject().value("musicQueueRenderer").toObject()
+		.value("content").toObject().value("playlistPanelRenderer").toObject()
+		.value("contents").toArray();
+	auto result = std::vector<Track>();
+	static const auto valid = QRegularExpression(u"^[A-Za-z0-9_-]{11}$"_q);
+	for (const auto &entry : rows) {
+		auto item = entry.toObject();
+		if (item.contains("playlistPanelVideoWrapperRenderer")) {
+			item = item.value("playlistPanelVideoWrapperRenderer").toObject()
+				.value("primaryRenderer").toObject();
+		}
+		const auto row = item.value("playlistPanelVideoRenderer").toObject();
+		const auto id = row.value("videoId").toString();
+		if (!valid.match(id).hasMatch() || row.contains("unplayableText")) {
+			continue;
+		}
+		const auto title = row.value("title").toObject()
+			.value("runs").toArray().at(0).toObject().value("text").toString().trimmed();
+		const auto byline = row.value("longBylineText").toObject().value("runs").toArray();
+		auto credits = QStringList();
+		auto artistId = QString();
+		for (const auto &entry : byline) {
+			const auto run = entry.toObject();
+			const auto channel = run.value("navigationEndpoint").toObject()
+				.value("browseEndpoint").toObject().value("browseId").toString();
+			if (channel.startsWith(u"UC"_q)) {
+				if (credits.empty()) {
+					artistId = channel;
+				}
+				credits.push_back(run.value("text").toString());
+			}
+		}
+		const auto artist = credits.empty()
+			? byline.at(0).toObject().value("text").toString().trimmed()
+			: credits.join(u", "_q);
+		if (title.isEmpty() || artist.isEmpty()) {
+			continue;
+		}
+		auto track = CatalogTrack(id, LargestThumbnail(row.value("thumbnail").toObject()
+			.value("thumbnails").toArray()));
+		track.title = title;
+		track.artist = artist;
+		track.artistId = artistId;
+		track.uploaderName = artist;
+		track.durationMs = ReadSeconds(row.value("lengthText").toObject()
+			.value("runs").toArray().at(0).toObject().value("text").toString()) * 1000;
+		result.push_back(std::move(track));
+	}
+	return result;
 }
 
 void SearchSong(const Track &track, Fn<void(QString)> done) {
@@ -534,6 +595,34 @@ bool HasYouTubeMusicMetadata(const Track &track) {
 	return (track.id.toULongLong() || !track.videoId.isEmpty())
 		&& !MatchText(track.title).isEmpty()
 		&& !MatchText(track.artist).isEmpty();
+}
+
+void LoadYouTubeMusicRecommendations(
+		const QString &videoId,
+		Fn<void(std::vector<Track>)> done) {
+	LoadCatalogConfig([=](CatalogConfig config) {
+		if (config.key.isEmpty()) {
+			done({});
+			return;
+		}
+		auto url = QUrl(QString::fromLatin1(kOrigin) + u"/youtubei/v1/next"_q);
+		auto query = QUrlQuery();
+		query.addQueryItem(u"alt"_q, u"json"_q);
+		query.addQueryItem(u"key"_q, config.key);
+		url.setQuery(query);
+		CatalogRequest(url, QJsonObject{
+			{ "context", QJsonObject{ { "client", config.client } } },
+			{ "videoId", videoId },
+			{ "playlistId", u"RDAMVM"_q + videoId },
+			{ "params", "wAEB" },
+			{ "enablePersistentPlaylistPanel", true },
+			{ "isAudioOnly", true },
+			{ "tunerSettingValue", "AUTOMIX_SETTING_NORMAL" },
+		}, [=](QByteArray data) {
+			if (data.isEmpty()) Config() = {};
+			done(ParseRecommendations(QJsonDocument::fromJson(data).object()));
+		});
+	});
 }
 
 void DownloadYouTubeMusic(const Track &track, AudioFileDone done) {

@@ -397,15 +397,11 @@ void CollectArtistSongs(
 			.value("runs").toArray().at(0).toObject().value("text").toString().trimmed();
 		const auto byline = row.value("longBylineText").toObject().value("runs").toArray();
 		auto credits = QStringList();
-		auto artistId = QString();
 		for (const auto &entry : byline) {
 			const auto run = entry.toObject();
 			const auto channel = run.value("navigationEndpoint").toObject()
 				.value("browseEndpoint").toObject().value("browseId").toString();
 			if (channel.startsWith(u"UC"_q)) {
-				if (credits.empty()) {
-					artistId = channel;
-				}
 				credits.push_back(run.value("text").toString());
 			}
 		}
@@ -419,7 +415,6 @@ void CollectArtistSongs(
 			.value("thumbnails").toArray()));
 		track.title = title;
 		track.artist = artist;
-		track.artistId = artistId;
 		track.uploaderName = artist;
 		track.durationMs = ReadSeconds(row.value("lengthText").toObject()
 			.value("runs").toArray().at(0).toObject().value("text").toString()) * 1000;

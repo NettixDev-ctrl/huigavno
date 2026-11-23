@@ -85,7 +85,10 @@ QNetworkAccessManager &Net() {
 			|| host == u"api.soundcloud.com"_q
 			|| host == u"soundcloud.com"_q
 			|| host.endsWith(u".sndcdn.com"_q)
-			|| host.endsWith(u".soundcloud.cloud"_q));
+			|| host.endsWith(u".soundcloud.cloud"_q)
+			// Обложки треков YouTube Music.
+			|| host.endsWith(u".ytimg.com"_q)
+			|| host.endsWith(u".googleusercontent.com"_q));
 }
 
 // id трека — каноничное положительное число: всё остальное могло прийти из чужого ответа.

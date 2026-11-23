@@ -5058,20 +5058,108 @@ void SaveHintSticker(DocumentData *document) {
 	Mokagram::Settings::SetString(key, QString::fromLatin1(bytes.toBase64()));
 }
 
-// Пустой поиск: анимированный стикер посередине. Правой кнопкой его
-// можно сменить на любой свой стикер.
+class HintStickerMenu {
+public:
+	void show(
+			QWidget *parent,
+			QWidget *panelParent,
+			not_null<Window::SessionController*> controller,
+			QPoint global) {
+		_menu = base::make_unique_q<Ui::PopupMenu>(
+			parent,
+			st::popupMenuWithIcons);
+		_menu->addAction(
+			QString::fromUtf8(Mokagram::Lang::Tr("Сменить стикер")),
+			[=] { choose(panelParent, controller, global); },
+			&st::menuIconStickers);
+		if (!Mokagram::Settings::String(
+				QString::fromLatin1(kHintStickerKey)).isEmpty()) {
+			_menu->addAction(
+				QString::fromUtf8(Mokagram::Lang::Tr("Вернуть стандартный")),
+				[] { SaveHintSticker(nullptr); },
+				&st::menuIconRestore);
+		}
+		_menu->popup(global);
+	}
+
+	void hide() {
+		_menu.reset();
+		if (_panel) {
+			_panel->hideFast();
+		}
+	}
+
+private:
+	void choose(
+			QWidget *parent,
+			not_null<Window::SessionController*> controller,
+			QPoint global) {
+		if (!_panel) {
+			using Selector = ChatHelpers::TabbedSelector;
+			_panel = base::make_unique_q<ChatHelpers::TabbedPanel>(
+				parent,
+				controller,
+				object_ptr<Selector>(
+					nullptr,
+					controller->uiShow(),
+					Window::GifPauseReason::Layer,
+					Selector::Mode::StickersOnly));
+			const auto panel = _panel.get();
+			panel->setDesiredHeightValues(
+				1.,
+				st::emojiPanMinHeight / 2,
+				st::emojiPanMinHeight);
+			panel->selector()->setCurrentPeer(controller->session().user());
+			panel->selector()->fileChosen(
+			) | rpl::on_next([=](ChatHelpers::FileChosen data) {
+				if (data.document->sticker()) {
+					SaveHintSticker(data.document);
+					panel->hideAnimated();
+				}
+			}, panel->lifetime());
+		}
+		const auto panel = _panel.get();
+		const auto local = parent->mapFromGlobal(global);
+		const auto bottom = std::clamp(
+			local.y(),
+			std::min(panel->height(), parent->height()),
+			parent->height());
+		panel->moveBottomRight(bottom, local.x() + panel->width() / 2);
+		panel->showAnimated();
+	}
+
+	base::unique_qptr<Ui::PopupMenu> _menu;
+	base::unique_qptr<ChatHelpers::TabbedPanel> _panel;
+};
+
 class StickerHint final : public Ui::RpWidget {
 public:
+	enum class Mode { Compact, Fullscreen };
+	static constexpr auto kVideoWidth = 512;
+	static constexpr auto kVideoHeight = 377;
+	static constexpr auto kVideoMaxWidth = 220;
+
 	StickerHint(
 		QWidget *parent,
 		not_null<Main::Session*> session,
-		Fn<void(QPoint)> showMenu)
+		Fn<void(QPoint)> showMenu,
+		Mode mode = Mode::Compact)
 	: RpWidget(parent)
 	, _session(session)
-	, _showMenu(std::move(showMenu)) {
-		_sheet = QPixmap(u":/gui/art/mokagram_music_hint.png"_q);
-		_sheet.setDevicePixelRatio(2.);
-		resize(width(), kSide + 56);
+	, _showMenu(std::move(showMenu))
+	, _mode(mode) {
+		if (_mode == Mode::Fullscreen) {
+			setFocusPolicy(Qt::StrongFocus);
+			connect(qApp, &QGuiApplication::applicationStateChanged, this, [=] {
+				update();
+			});
+			PowerSaving::Changes(
+			) | rpl::on_next([=] { update(); }, lifetime());
+		} else {
+			_sheet = QPixmap(u":/gui/art/mokagram_music_hint.png"_q);
+			_sheet.setDevicePixelRatio(2.);
+			resize(width(), kSide + 56);
+		}
 		paintRequest(
 		) | rpl::on_next([=](QRect) {
 			paint();
@@ -5081,7 +5169,7 @@ public:
 		) | rpl::on_next([=](const QString &) {
 			loadSticker();
 		}, lifetime());
-		if (!PowerSaving::On(PowerSaving::kAnimations)) {
+		if (_mode == Mode::Compact && !PowerSaving::On(PowerSaving::kAnimations)) {
 			_started = crl::now();
 			_animation.init([=](crl::time) {
 				update();
@@ -5094,7 +5182,11 @@ public:
 protected:
 	void contextMenuEvent(QContextMenuEvent *e) override {
 		if (_showMenu) {
-			_showMenu(e->globalPos());
+			const auto global = (e->reason() == QContextMenuEvent::Keyboard)
+				? mapToGlobal(rect().center())
+				: e->globalPos();
+			_showMenu(global);
+			e->accept();
 		}
 	}
 
@@ -5118,7 +5210,9 @@ private:
 		}) | rpl::take(1) | rpl::on_next([=] {
 			using namespace HistoryView;
 			const auto info = document->sticker();
-			const auto box = QSize(kSide, kSide);
+			const auto box = (_mode == Mode::Fullscreen)
+				? QSize(style::ConvertScale(kVideoMaxWidth), style::ConvertScale(kVideoMaxWidth))
+				: QSize(kSide, kSide);
 			if (info->isLottie()) {
 				_player = std::make_shared<LottiePlayer>(
 					ChatHelpers::LottiePlayerFromDocument(
@@ -5145,34 +5239,50 @@ private:
 	void paint() {
 		auto p = QPainter(this);
 		auto hq = PainterHighQualityEnabler(p);
-		const auto target = QRect((width() - kSide) / 2, 28, kSide, kSide);
-		if (_custom) {
-			// Пока свой стикер грузится, место остаётся пустым,
-			// чтобы стандартный не мелькал перед ним.
-			if (!_player || !_player->ready()) {
-				return;
-			}
-			const auto paused = !_started || !window()->isActiveWindow();
+		const auto fullscreen = (_mode == Mode::Fullscreen);
+		const auto target = fullscreen
+			? rect()
+			: QRect((width() - kSide) / 2, 28, kSide, kSide);
+		if (target.isEmpty()) {
+			return;
+		}
+		const auto paused = fullscreen
+			? (!isVisible() || !Mokagram::Perf::UserIsLooking()
+				|| PowerSaving::On(PowerSaving::kAnimations))
+			: (!_started || !window()->isActiveWindow());
+		if (_player && _player->ready()) {
+			const auto fitted = fullscreen
+				? _custom->dimensions.scaled(target.size(), Qt::KeepAspectRatio)
+				: target.size();
 			const auto frame = _player->frame(
-				QSize(kSide, kSide),
+				fitted.isEmpty() ? target.size() : fitted,
 				QColor(0, 0, 0, 0),
 				false,
 				crl::now(),
 				paused).image;
-			const auto size = HistoryView::DownscaledSize(
-				frame.size() / style::DevicePixelRatio(),
-				QSize(kSide, kSide));
-			p.drawImage(
-				QRect(
-					target.x() + (kSide - size.width()) / 2,
-					target.y() + (kSide - size.height()) / 2,
-					size.width(),
-					size.height()),
-				frame);
-			_player->markFrameShown();
+			if (!frame.isNull()) {
+				const auto size = HistoryView::DownscaledSize(
+					frame.size() / style::DevicePixelRatio(),
+					target.size());
+				p.drawImage(
+					QRect(
+						target.x() + (target.width() - size.width()) / 2,
+						target.y() + (target.height() - size.height()) / 2,
+						size.width(),
+						size.height()),
+					frame);
+				if (!fullscreen || !paused) {
+					_player->markFrameShown();
+				}
+				_video = nullptr;
+				return;
+			}
+		}
+		if (fullscreen) {
+			paintVideo(p, target, paused);
 			return;
 		}
-		if (_sheet.isNull()) {
+		if (_custom || _sheet.isNull()) {
 			return;
 		}
 		const auto frame = _started
@@ -5190,6 +5300,30 @@ private:
 				kSource));
 	}
 
+	void paintVideo(QPainter &p, const QRect &target, bool paused) {
+		if (!_video) {
+			auto file = QFile(u":/animations/mokagram_search_empty.webm"_q);
+			if (!file.open(QIODevice::ReadOnly)) {
+				return;
+			}
+			_video = Media::Clip::MakeReader(
+				file.readAll(),
+				[=](Media::Clip::Notification) { update(); });
+		}
+		if (!_video->ready()) {
+			return;
+		}
+		const auto request = Media::Clip::FrameRequest{
+			.frame = target.size(),
+			.outer = target.size(),
+			.factor = style::DevicePixelRatio(),
+		};
+		if (!_video->started()) {
+			_video->start(request);
+		}
+		p.drawImage(target, _video->current(request, paused ? 0 : crl::now()));
+	}
+
 	static constexpr auto kSource = 192;
 	static constexpr auto kSide = kSource / 2;
 	static constexpr auto kColumns = 9;
@@ -5198,7 +5332,9 @@ private:
 
 	const not_null<Main::Session*> _session;
 	const Fn<void(QPoint)> _showMenu;
+	const Mode _mode;
 	QPixmap _sheet;
+	Media::Clip::ReaderPointer _video;
 	Ui::Animations::Basic _animation;
 	crl::time _started = 0;
 	DocumentData *_custom = nullptr;
@@ -7133,6 +7269,7 @@ public:
 			return;
 		}
 		_closing = true;
+		_searchHintMenu.hide();
 		stopHomeBackExit();
 		_ambientTimer.stop();
 		if (_cancelMotion) _cancelMotion();
@@ -7158,6 +7295,7 @@ protected:
 		updateAmbientTimer();
 	}
 	void hideEvent(QHideEvent *event) override {
+		_searchHintMenu.hide();
 		_ambientTimer.stop();
 		_preparedBackdrop = QImage();
 		RpWidget::hideEvent(event);
@@ -7207,6 +7345,7 @@ protected:
 		if (e->button() != Qt::LeftButton) {
 			return;
 		}
+		_searchHintMenu.hide();
 		const auto hover = infoAt(e->pos());
 		if (hover == InfoHover::None) {
 			return;
@@ -7596,6 +7735,9 @@ protected:
 			layout.scrollTop,
 			layout.center.width(),
 			std::max(scrollBottom - layout.scrollTop, 0));
+		if (_searchEmptySticker) {
+			_searchEmptySticker->setGeometry(searchHintGeometry(layout));
+		}
 		_tabContent->resizeToWidth(_tabScroll->width());
 		if (_homeAlbumHeader) _homeAlbumHeader->setBannerTopInset(_tabScroll->y());
 		updateHomeArtistBar();
@@ -8733,6 +8875,20 @@ protected:
 			nullptr, _discographyExpanded, _discographyOffset));
 	}
 
+	[[nodiscard]] QRect searchHintGeometry(const Layout &layout) const {
+		const auto areaHeight = std::max(layout.center.bottom() - layout.scrollTop, 0);
+		const auto availableHeight = std::max(areaHeight - style::ConvertScale(72), 0);
+		const auto width = std::min({
+			style::ConvertScale(StickerHint::kVideoMaxWidth),
+			std::max(layout.center.width(), 0),
+			availableHeight * StickerHint::kVideoWidth / StickerHint::kVideoHeight,
+		});
+		const auto height = width * StickerHint::kVideoHeight / StickerHint::kVideoWidth;
+		const auto top = layout.scrollTop
+			+ std::max((areaHeight - height - style::ConvertScale(56)) / 2, 0);
+		return QRect(layout.center.center().x() - width / 2, top, width, height);
+	}
+
 	void rebuildTab() {
 		_rebuildingTab = true;
 		const auto rebuildingGuard = gsl::finally([&] { _rebuildingTab = false; });
@@ -8749,14 +8905,18 @@ protected:
 		const auto emptySearch = searching && _searchField->text().trimmed().isEmpty()
 			&& !(_searchChats && _searchChat);
 		if (!emptySearch) {
+			_searchHintMenu.hide();
 			_searchEmptySticker = nullptr;
 		} else if (!_searchEmptySticker) {
-			auto file = QFile(u":/animations/mokagram_search_empty.webm"_q);
-			if (file.open(QIODevice::ReadOnly)) {
-				_searchEmptySticker = Media::Clip::MakeReader(
-					file.readAll(),
-					[=](Media::Clip::Notification) { update(); });
-			}
+			_searchEmptySticker = base::make_unique_q<StickerHint>(
+				this,
+				&_controller->session(),
+				[=](QPoint global) {
+					_searchHintMenu.show(this, this, _controller, global);
+				},
+				StickerHint::Mode::Fullscreen);
+			_searchEmptySticker->setGeometry(searchHintGeometry(computeLayout()));
+			_searchEmptySticker->show();
 		}
 		const auto fresh = searching && !_searchField->isVisible();
 		_searchField->setVisible(searching);
@@ -9474,32 +9634,12 @@ protected:
 					Qt::AlignLeft | Qt::AlignTop | Qt::TextWordWrap,
 					_tabNote);
 			}
-			if (_tab == Tab::Search && _searchField->text().trimmed().isEmpty()
-				&& !(_searchChats && _searchChat)) {
-				const auto area = QRect(
-					layout.center.x(), layout.scrollTop,
-					layout.center.width(),
-					std::max(layout.center.bottom() - layout.scrollTop, 0));
-				const auto stickerWidth = std::max(0, std::min({ s(220), area.width(),
-					std::max(area.height() - s(72), 0) * 512 / 377 }));
-				const auto stickerHeight = stickerWidth * 377 / 512;
-				const auto top = area.y() + std::max((area.height() - stickerHeight - s(56)) / 2, 0);
-				const auto sticker = QRect(area.center().x() - stickerWidth / 2, top, stickerWidth, stickerHeight);
-				if (_searchEmptySticker && _searchEmptySticker->ready() && stickerWidth > 0) {
-					const auto request = Media::Clip::FrameRequest{
-						.frame = sticker.size(),
-						.outer = sticker.size(),
-						.factor = style::DevicePixelRatio(),
-					};
-					if (!_searchEmptySticker->started()) _searchEmptySticker->start(request);
-					const auto animate = isVisible() && Mokagram::Perf::UserIsLooking()
-						&& !PowerSaving::On(PowerSaving::kAnimations);
-					p.drawImage(sticker, _searchEmptySticker->current(request, animate ? crl::now() : 0));
-				}
+			if (_tab == Tab::Search && _searchEmptySticker) {
+				const auto sticker = _searchEmptySticker->geometry();
 				p.setFont(labelFont(15, false));
 				p.setPen(st::windowSubTextFg);
-				p.drawText(QRect(area.x() + s(10), sticker.bottom() + s(12),
-					std::max(area.width() - s(20), 0), s(44)),
+				p.drawText(QRect(layout.center.x() + s(10), sticker.bottom() + s(12),
+					std::max(layout.center.width() - s(20), 0), s(44)),
 					Qt::AlignHCenter | Qt::AlignTop | Qt::TextWordWrap,
 					QString::fromUtf8(Mokagram::Lang::Tr("Кажется тут ничего нет.. напиши что нибудь в поиск")));
 			}
@@ -10315,7 +10455,8 @@ private:
 	crl::time _ambientAt = 0;
 	Media::Clip::ReaderPointer _motionCover;
 	Media::Clip::ReaderPointer _playlistsSticker;
-	Media::Clip::ReaderPointer _searchEmptySticker;
+	base::unique_qptr<StickerHint> _searchEmptySticker;
+	HintStickerMenu _searchHintMenu;
 	Media::Clip::ReaderPointer _spotifyCanvas;
 	QString _motionFor;
 	Fn<void()> _cancelMotion;
@@ -12068,63 +12209,12 @@ void ShowMusicBoxWith(
 		const auto searchState = box->lifetime().make_state<SearchState>();
 		const auto runSearch = std::make_shared<Fn<void()>>();
 
-		// Правая кнопка по стикеру: сменить на свой или вернуть стандартный.
-		struct HintStickerState {
-			base::unique_qptr<Ui::PopupMenu> menu;
-			base::unique_qptr<ChatHelpers::TabbedPanel> panel;
-		};
-		const auto hintSticker = box->lifetime().make_state<HintStickerState>();
-		const auto chooseHintSticker = [=](QPoint global) {
-			const auto outer = box->getDelegate()->outerContainer();
-			if (!outer) {
-				return;
-			}
-			if (!hintSticker->panel) {
-				using Selector = ChatHelpers::TabbedSelector;
-				hintSticker->panel = base::make_unique_q<ChatHelpers::TabbedPanel>(
-					outer.data(),
-					controller,
-					object_ptr<Selector>(
-						nullptr,
-						controller->uiShow(),
-						Window::GifPauseReason::Layer,
-						Selector::Mode::StickersOnly));
-				const auto panel = hintSticker->panel.get();
-				panel->setDropDown(false);
-				panel->setDesiredHeightValues(
-					1.,
-					st::emojiPanMinHeight / 2,
-					st::emojiPanMinHeight);
-				panel->hide();
-				panel->selector()->setCurrentPeer(controller->session().user());
-				panel->selector()->fileChosen(
-				) | rpl::on_next([=](ChatHelpers::FileChosen data) {
-					SaveHintSticker(data.document);
-					panel->hideAnimated();
-				}, panel->lifetime());
-			}
-			const auto panel = hintSticker->panel.get();
-			const auto local = outer->mapFromGlobal(global);
-			panel->moveBottomRight(local.y(), local.x() + panel->width() / 2);
-			panel->showAnimated();
-		};
+		const auto hintStickerMenu = box->lifetime().make_state<HintStickerMenu>();
 		const auto showHintMenu = [=](QPoint global) {
-			hintSticker->menu = base::make_unique_q<Ui::PopupMenu>(
-				box,
-				st::popupMenuWithIcons);
-			const auto menu = hintSticker->menu.get();
-			menu->addAction(
-				QString::fromUtf8(Mokagram::Lang::Tr("Сменить стикер")),
-				[=] { chooseHintSticker(global); },
-				&st::menuIconStickers);
-			if (!Mokagram::Settings::String(
-					QString::fromLatin1(kHintStickerKey)).isEmpty()) {
-				menu->addAction(
-					QString::fromUtf8(Mokagram::Lang::Tr("Вернуть стандартный")),
-					[] { SaveHintSticker(nullptr); },
-					&st::menuIconRestore);
+			const auto outer = box->getDelegate()->outerContainer();
+			if (outer) {
+				hintStickerMenu->show(box, outer.data(), controller, global);
 			}
-			menu->popup(global);
 		};
 
 		// Список: сверху строка действий (для подборки) и пояснение, дальше треки.

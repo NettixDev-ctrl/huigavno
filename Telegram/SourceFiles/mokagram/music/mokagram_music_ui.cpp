@@ -7052,9 +7052,6 @@ public:
 		_queueToggle->setAccessibleName(queueTitle);
 		_queueToggle->setFocusPolicy(Qt::TabFocus);
 		_queueToggle->setClickedCallback([=] {
-			if (_tab == Tab::Queue) {
-				setTab(Tab::Now);
-			}
 			setQueuePanelOpen(!_queuePanelOpen);
 		});
 		_queuePanel->hide();
@@ -7135,9 +7132,9 @@ public:
 				scheduleHomeMoreIfNeeded();
 			}
 		}, lifetime());
-		const auto names = std::array<const char*, 6>{
-			"Сейчас играет", "Главная", "Поиск", "Библиотека", "Плейлисты", "Очередь" };
-		for (auto i = 0; i != 6; ++i) {
+		const auto names = std::array{
+			"Сейчас играет", "Главная", "Поиск", "Библиотека", "Плейлисты" };
+		for (auto i = 0; i != int(names.size()); ++i) {
 			const auto item = Ui::CreateChild<NavItem>(
 				this,
 				QString::fromUtf8(Mokagram::Lang::Tr(names[i])),
@@ -7650,7 +7647,7 @@ protected:
 			update(layout.bar);
 		}
 	}
-	enum class Tab { Now, Home, Search, Library, Playlists, Queue };
+	enum class Tab { Now, Home, Search, Library, Playlists, Count };
 	struct Layout {
 		bool verticalNav = false;
 		bool compact = false;
@@ -7679,7 +7676,7 @@ protected:
 		int controlsTop = 0;
 	};
 	[[nodiscard]] bool showsQueue() const {
-		return _tab == Tab::Queue || (_tab == Tab::Now && _lyricsMissing);
+		return _tab == Tab::Now && _lyricsMissing;
 	}
 	[[nodiscard]] Layout computeLayout() const {
 		const auto s = [](int v) { return style::ConvertScale(v); };
@@ -7781,11 +7778,8 @@ protected:
 		} else {
 			const auto contentWidth = std::max(mainWidth - 2 * contentMargin, 0);
 			result.center = QRect(contentMargin, top, contentWidth, areaHeight);
-			result.scrollTop = result.center.y() + ((_tab == Tab::Home || _tab == Tab::Library || _tab == Tab::Queue || _tab == Tab::Playlists)
-				? 0
-				: (_tab == Tab::Search)
-				? searchHeaderHeight(contentWidth)
-				: s(72));
+			result.scrollTop = result.center.y()
+				+ (_tab == Tab::Search ? searchHeaderHeight(contentWidth) : 0);
 		}
 
 		// Внизу: постоянная полоса управления.
@@ -7981,8 +7975,9 @@ protected:
 			const auto inner = std::max(layout.nav.width() - 2 * inset, 0);
 			const auto columns = layout.verticalNav ? 3 : count;
 			for (auto i = 0; i != count; ++i) {
-				const auto left = layout.nav.x() + inset + inner * (i % columns) / columns;
-				const auto right = layout.nav.x() + inset + inner * (i % columns + 1) / columns;
+				const auto at = navColumn(i, columns);
+				const auto left = layout.nav.x() + inset + int(inner * at / columns);
+				const auto right = layout.nav.x() + inset + int(inner * (at + 1.) / columns);
 				_nav[i]->setCentered(true);
 				_nav[i]->setGeometry(left, layout.nav.y() + s(40) * (i / columns), right - left, s(40));
 			}
@@ -8053,6 +8048,12 @@ protected:
 		auto event = QResizeEvent(size(), size());
 		resizeEvent(&event);
 		update();
+	}
+
+	[[nodiscard]] double navColumn(int index, int columns) const {
+		const auto rowStart = index - index % columns;
+		const auto rowSize = std::min(columns, int(_nav.size()) - rowStart);
+		return index % columns + (columns - rowSize) / 2.;
 	}
 
 	[[nodiscard]] bool queuePanelDocked() const {
@@ -8532,9 +8533,6 @@ protected:
 			}
 			return;
 		}
-		if (tab == Tab::Queue) {
-			setQueuePanelOpen(false);
-		}
 		stopHomeBackExit();
 		const auto from = _tab;
 		const auto animateTransition = _tab != Tab::Now
@@ -8583,7 +8581,7 @@ protected:
 		}
 		update(computeLayout().nav);
 		resetHomeNavigation();
-		for (auto i = 0; i != 6; ++i) {
+		for (auto i = 0; i != int(_nav.size()); ++i) {
 			_nav[i]->setActive(i == int(tab));
 		}
 		if (tab == Tab::Library) {
@@ -8653,20 +8651,6 @@ protected:
 				rebuildTab();
 			}
 		}));
-	}
-	[[nodiscard]] QString tabTitle() const {
-		const auto text = [&]() -> const char* {
-			switch (_tab) {
-			case Tab::Now: return "Сейчас играет";
-			case Tab::Home: return "Главная";
-			case Tab::Search: return "Поиск";
-			case Tab::Library: return "Любимые";
-			case Tab::Playlists: return "Плейлисты";
-			case Tab::Queue: return "Очередь";
-			}
-			return "";
-		}();
-		return QString::fromUtf8(Mokagram::Lang::Tr(text));
 	}
 	void loadHomeAlbums(int page) {
 		if (page < 0 || page >= int(_homePages.size())) {
@@ -9745,9 +9729,7 @@ protected:
 				}
 			}
 		} break;
-		case Tab::Queue:
-			fillTabQueue();
-			break;
+		case Tab::Count: Unexpected("Invalid music tab");
 		}
 		if (_tab == Tab::Search) {
 			if (_tabScroll->y() != computeLayout().scrollTop) {
@@ -9938,7 +9920,7 @@ protected:
 		const auto inset = s(4);
 		const auto segment = std::max(layout.nav.width() - 2 * inset, 0) / float64(layout.verticalNav ? 3 : _nav.size());
 		const auto at = layout.verticalNav
-			? float64(int(_tab) % 3)
+			? navColumn(int(_tab), 3)
 			: _navSlide.value(float64(int(_tab)));
 		const auto distance = std::abs(float64(int(_tab)) - _navSlideFrom);
 		const auto progress = distance > 0.
@@ -9961,15 +9943,6 @@ protected:
 		// Открытая вкладка лежит на карточке; на «Сейчас играет» обложка и текст прямо на фоне.
 		if ((_tab != Tab::Now || (showsQueue() && !_queuePanelOpen))
 			&& !(_tab == Tab::Home && _homeAlbumOpen)) {
-			if (_tab != Tab::Home && _tab != Tab::Library
-				&& _tab != Tab::Playlists && _tab != Tab::Search && !showsQueue()) {
-				p.setFont(labelFont(19, true));
-				p.setPen(Qt::white);
-				p.drawText(
-					QRect(layout.center.x() + s(10), layout.center.y() + s(16), layout.center.width() - s(20), s(44)),
-					Qt::AlignLeft | Qt::AlignVCenter,
-					tabTitle());
-			}
 			if (!_tabNote.isEmpty()) {
 				p.setFont(labelFont(15, false));
 				p.setPen(st::windowSubTextFg);
@@ -10659,7 +10632,7 @@ private:
 	Ui::PaddingWrap<Ui::VerticalLayout> *_tabContent = nullptr;
 	Ui::VerticalLayout *_tabList = nullptr;
 	QPointer<HomeAlbumHeader> _homeAlbumHeader;
-	std::array<NavItem*, 6> _nav = {};
+	std::array<NavItem*, int(Tab::Count)> _nav = {};
 	Ui::Animations::Simple _navSlide;
 	float64 _navSlideFrom = 0.;
 	Ui::Animations::Simple _tabTransitionAnimation;
@@ -10695,7 +10668,7 @@ private:
 	bool _searchChats = false;
 	bool _lyricsMissing = false;
 	Tab _tab;
-	Tab _rebuiltTab = Tab::Queue;
+	std::optional<Tab> _rebuiltTab;
 	bool _librarySyncLoading = false;
 	crl::time _librarySyncSucceeded = 0;
 	bool _playlistsSyncLoading = false;

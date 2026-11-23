@@ -96,6 +96,9 @@ void AttachCommentsToPlayer(
 
 void DebugSaveTrack(int index);
 void DebugPlay(int index);
+void DebugPlayYouTube(
+	not_null<Window::SessionController*> controller,
+	const QString &videoId);
 void DebugGrabFullscreen(const QString &path);
 void DebugLike(int index);
 void DebugTab(int tab);

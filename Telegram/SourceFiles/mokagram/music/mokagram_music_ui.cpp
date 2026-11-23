@@ -11909,6 +11909,23 @@ void DebugPlay(int index) {
 	PlayFromResults(index);
 }
 
+void DebugPlayYouTube(
+		not_null<Window::SessionController*> controller,
+		const QString &videoId) {
+	if (videoId.isEmpty()) {
+		return;
+	}
+	BindController(controller);
+	PlayAll({ Track{
+		.id = u"yt:"_q + videoId,
+		.title = u"YouTube Music"_q,
+		.artist = u"Debug"_q,
+		.videoId = videoId,
+		.durationMs = 0,
+		.unavailable = true,
+	} });
+}
+
 void DebugLike(int index) {
 	const auto &queue = QueueState();
 	if (index >= 0 && index < int(queue.results.size())) {

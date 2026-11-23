@@ -3122,6 +3122,8 @@ void StartDebugCommands() {
 			Mokagram::Music::DebugLike(cmd.mid(10).toInt());
 		} else if (cmd.startsWith(u"musicplay:"_q)) {
 			Mokagram::Music::DebugPlay(cmd.mid(10).toInt());
+		} else if (cmd.startsWith(u"musicyt:"_q)) {
+			Mokagram::Music::DebugPlayYouTube(controller, cmd.mid(8));
 		} else if (cmd.startsWith(u"musicsave:"_q)) {
 			Mokagram::Music::DebugSaveTrack(cmd.mid(10).toInt());
 		} else if (cmd.startsWith(u"music"_q)) {

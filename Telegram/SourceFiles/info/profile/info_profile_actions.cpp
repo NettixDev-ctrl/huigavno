@@ -112,6 +112,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/text/text_utilities.h"
 #include "ui/text/text_variant.h"
 #include "ui/toast/toast.h"
+#include "ui/top_background_gradient.h"
 #include "ui/vertical_list.h"
 #include "ui/widgets/buttons.h"
 #include "ui/widgets/checkbox.h"
@@ -1392,6 +1393,19 @@ public:
 					? std::make_optional(colors->bg.front())
 					: std::nullopt;
 			}
+			const auto patternId = (_collectible && _collectible->patternDocumentId)
+				? _collectible->patternDocumentId
+				: user->profileBackgroundEmojiId();
+			if (_patternId != patternId) {
+				_patternId = patternId;
+				_patternImage = QImage();
+				_patternEmoji = patternId
+					? user->owner().customEmojiManager().create(
+						patternId,
+						[=] { update(); },
+						Data::CustomEmojiSizeTag::Normal)
+					: nullptr;
+			}
 			update();
 		}, lifetime());
 	}
@@ -1410,6 +1424,45 @@ public:
 	}
 
 private:
+	void paintPattern(QPainter &p, int radius, QColor tint) {
+		if (!_patternEmoji) {
+			return;
+		}
+		const auto ratio = style::DevicePixelRatio();
+		const auto side = _patternEmoji->width();
+		if (_patternImage.isNull()
+			|| _patternImage.devicePixelRatio() != ratio
+			|| _patternTint != tint) {
+			if (!_patternEmoji->ready()) {
+				return;
+			}
+			_patternTint = tint;
+			_patternImage = QImage(
+				QSize(side, side) * ratio,
+				QImage::Format_ARGB32_Premultiplied);
+			_patternImage.setDevicePixelRatio(ratio);
+			_patternImage.fill(Qt::transparent);
+			auto mask = QPainter(&_patternImage);
+			_patternEmoji->paint(mask, { .textColor = Qt::white, .paused = true });
+			mask.setCompositionMode(QPainter::CompositionMode_SourceIn);
+			mask.fillRect(QRect(0, 0, side, side), tint);
+		}
+
+		p.save();
+		auto clip = QPainterPath();
+		clip.addRoundedRect(rect(), radius, radius);
+		p.setClipPath(clip, Qt::IntersectClip);
+		p.setRenderHint(QPainter::SmoothPixmapTransform);
+		for (const auto &point : Ui::PatternBgPointsSmall()) {
+			const auto size = side * point.scale;
+			const auto x = point.position.x() * width() - size / 2.;
+			const auto y = point.position.y() * height() - size / 2.;
+			p.setOpacity(point.opacity);
+			p.drawImage(QRectF(x, y, size, size), _patternImage);
+		}
+		p.restore();
+	}
+
 	void loadCover() {
 		using namespace Mokagram::Music;
 		_cover = QImage();
@@ -1510,6 +1563,11 @@ private:
 			p.setBrush(background);
 		}
 		p.drawRoundedRect(rect(), cardRadius, cardRadius);
+		// Mokagram: paint a muted profile pattern behind the track details.
+		const auto patternTint = (_collectible && _collectible->patternColor.isValid())
+			? _collectible->patternColor
+			: Ui::BlendColors(edge, primary, 0.5);
+		paintPattern(p, cardRadius, patternTint);
 		const auto inset = style::ConvertScale(2);
 		if (hasFocus() && cardRadius > inset) {
 			p.setPen(QPen(primary, style::ConvertScale(1)));
@@ -1565,6 +1623,10 @@ private:
 	QImage _cover;
 	std::optional<QColor> _profileColor;
 	std::shared_ptr<Data::EmojiStatusCollectible> _collectible;
+	DocumentId _patternId = 0;
+	std::unique_ptr<Ui::Text::CustomEmoji> _patternEmoji;
+	QColor _patternTint;
+	QImage _patternImage;
 };
 
 class DetailsFiller {

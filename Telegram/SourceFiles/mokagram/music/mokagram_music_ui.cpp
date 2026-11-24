@@ -268,6 +268,7 @@ constexpr auto kCatalogArtSize = 48;
 constexpr auto kFeaturedArtistHeight = 96;
 constexpr auto kFeaturedArtistArtSize = 64;
 constexpr auto kFeaturedArtistButtonWidth = 112;
+constexpr auto kArtistTrackPageSize = 12;
 
 struct Radio {
 	Track seed;
@@ -9288,6 +9289,7 @@ protected:
 		if (!_homeReturnToArtist) {
 			_homeArtistFeedScroll = _tabScroll->scrollTop();
 			_homeArtistLikesOpen = false;
+			_homeArtistVisibleTracks = kArtistTrackPageSize;
 			_discographyFilter = DiscographyFilter::All;
 			_discographyExpanded = false;
 			*_discographyOffset = 0;
@@ -9619,7 +9621,7 @@ protected:
 		const auto tr = [](const char *text) {
 			return QString::fromUtf8(Mokagram::Lang::Tr(text));
 		};
-		const auto addRows = [&](const std::vector<Track> &tracks, RowMode mode = RowMode::Results, QString playlistId = {}) {
+		const auto addRows = [&](const std::vector<Track> &tracks, RowMode mode = RowMode::Results, QString playlistId = {}, int visibleLimit = -1) {
 			auto playable = std::make_shared<std::vector<Track>>();
 			for (const auto &track : tracks) {
 				if (CanPlayTrack(track)) {
@@ -9628,7 +9630,9 @@ protected:
 			}
 			QueueState().results = *playable;
 			auto resultIndex = 0;
-			for (auto i = 0; i != int(tracks.size()); ++i) {
+			const auto count = (visibleLimit < 0)
+				? int(tracks.size()) : std::min(int(tracks.size()), visibleLimit);
+			for (auto i = 0; i != count; ++i) {
 				const auto index = CanPlayTrack(tracks[i]) ? resultIndex++ : -1;
 				const auto row = _tabList->add(object_ptr<Row>(
 					_tabList,
@@ -9697,7 +9701,26 @@ protected:
 						_homeArtistYouTubeTracks);
 					if (!popular.empty()) {
 						_tabList->add(object_ptr<Ui::FlatLabel>(_tabList, tr("Популярное"), st::boxLabel), QMargins(20, 8, 20, 4));
-						addRows(popular, RowMode::Album);
+						addRows(popular, RowMode::Album, {}, _homeArtistVisibleTracks);
+						const auto count = int(popular.size());
+						if (_homeArtistVisibleTracks < count) {
+							const auto more = _tabList->add(object_ptr<Ui::RoundButton>(
+								_tabList,
+								rpl::single(tr("Показать ещё")),
+								st::defaultLightButton), QMargins(
+									style::ConvertScale(20), style::ConvertScale(8),
+									style::ConvertScale(20), style::ConvertScale(8)));
+							const auto generation = _homeAlbumGeneration;
+							more->setClickedCallback([=] {
+								crl::on_main(this, [=] {
+									if (_tab != Tab::Home || !_homeArtistOpen
+										|| generation != _homeAlbumGeneration) return;
+									_homeArtistVisibleTracks = std::min(
+										_homeArtistVisibleTracks + kArtistTrackPageSize, count);
+									rebuildTab();
+								});
+							});
+						}
 					}
 					auto artistLikes = std::vector<Track>();
 					const auto &artistId = _homeArtistProfile.id;
@@ -11075,6 +11098,7 @@ private:
 	std::vector<Track> _homeArtistYouTubeTracks;
 	bool _homeArtistYouTubeDeferred = false;
 	bool _homeArtistYouTubeLoading = false;
+	int _homeArtistVisibleTracks = kArtistTrackPageSize;
 	std::vector<Album> _homeArtistAlbums;
 	QString _homeArtistBannerUrl;
 	DiscographyFilter _discographyFilter = DiscographyFilter::All;

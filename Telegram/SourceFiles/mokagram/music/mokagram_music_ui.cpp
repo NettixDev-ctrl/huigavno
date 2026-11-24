@@ -8500,7 +8500,7 @@ protected:
 		if (track.id.startsWith(u"yt:"_q)) {
 			if (track.artistId.startsWith(u"yt:"_q)
 				&& TrackArtistNames(track).size() == 1) {
-				done({ track.artistId, name, track.artistArtworkUrl, {} });
+				done(ArtistInfo{ track.artistId, name, track.artistArtworkUrl, {} });
 			} else {
 				ResolveYouTubeMusicArtist(name, done);
 			}

@@ -4,6 +4,7 @@
 // mokagram-id: abaf65d9
 #include "mokagram/misc/mokagram_misc.h"
 #include "mokagram/quote/mokagram_quote.h"
+#include "mokagram/quote/mokagram_frame.h"
 #include "mokagram/lang/mokagram_lang.h"
 
 #include "base/call_delayed.h"
@@ -502,7 +503,7 @@ struct Composed {
 	QRectF content; // где в итоге лежат сообщения (пиксели итога)
 };
 
-[[nodiscard]] Composed Compose(const QImage &content, int gradient, int cardMode, int outer, bool shadow) {
+[[nodiscard]] Composed Compose(const QImage &content, int gradient, int cardMode, int outer, bool shadow, bool ramka) {
 	const auto dpr = std::max(1., content.devicePixelRatio());
 	const auto innerPad = int(22 * dpr);
 	const auto dotsH = 0;
@@ -579,7 +580,13 @@ struct Composed {
 	}
 	p.end();
 	result.setDevicePixelRatio(1.);
-	return { result, QRectF(at, QSizeF(content.size())) };
+	auto contentRect = QRectF(at, QSizeF(content.size()));
+	if (ramka) {
+		auto offset = QPoint();
+		result = FrameImage(result, offset);
+		contentRect.translate(offset);
+	}
+	return { std::move(result), contentRect };
 }
 
 class Pills final : public Ui::RpWidget {
@@ -813,6 +820,12 @@ void RegisterSettings() {
 		.defaultValue = false,
 	});
 	add({
+		.key = u"quote.ramka"_q,
+		.title = U(Mokagram::Lang::Tr("Ramka")),
+		.kind = S::Kind::Bool,
+		.defaultValue = false,
+	});
+	add({
 		.key = u"quote.width"_q,
 		.title = U(Mokagram::Lang::Tr("Ширина текстовой цитаты, px")),
 		.description = U(Mokagram::Lang::Tr("Только если сообщения не на экране и рисуются как текст.")),
@@ -1002,6 +1015,51 @@ struct RatioScope {
 	return image;
 }
 
+void RenderMessageShot(
+		not_null<Window::SessionController*> controller,
+		std::vector<FullMsgId> ids,
+		bool ramka,
+		Fn<void(QImage)> done) {
+	const auto ratio = 2 + std::clamp(S::Int(u"quote.quality"_q), 0, 2);
+	{
+		const auto scale = EmojiScale(ratio);
+		const auto shot = MakeShot(controller, ids);
+		if (!shot || shot->items.size() != ids.size()) {
+			done(QImage());
+			return;
+		}
+		// Start the same media and emoji loads as the screenshot dialog.
+		(void)RenderShot(*shot, ratio);
+	}
+	const auto weak = base::make_weak(controller);
+	base::call_delayed(900, [=] {
+		const auto strong = weak.get();
+		if (!strong) {
+			done(QImage());
+			return;
+		}
+		// Resolve again: a message may have been deleted during media loading.
+		const auto scale = EmojiScale(ratio);
+		const auto shot = MakeShot(strong, ids);
+		if (!shot || shot->items.size() != ids.size()) {
+			done(QImage());
+			return;
+		}
+		const auto content = StackRows({ RenderShot(*shot, ratio) });
+		if (content.isNull()) {
+			done(QImage());
+			return;
+		}
+		done(Compose(
+			content,
+			S::Int(u"quote.bg"_q),
+			S::Int(u"quote.theme"_q),
+			S::Int(u"quote.padding"_q),
+			S::Bool(u"quote.shadow"_q),
+			ramka).image);
+	});
+}
+
 void ShowQuoteBoxNow(
 		not_null<Window::SessionController*> controller,
 		std::shared_ptr<Shot> shot,
@@ -1122,7 +1180,8 @@ void ShowQuoteBoxNow(
 				S::Int(u"quote.bg"_q),
 				S::Int(u"quote.theme"_q),
 				S::Int(u"quote.padding"_q),
-				S::Bool(u"quote.shadow"_q));
+				S::Bool(u"quote.shadow"_q),
+				S::Bool(u"quote.ramka"_q));
 		};
 		const auto refresh = [=] {
 			*result = composedFor();
@@ -1222,6 +1281,21 @@ void ShowQuoteBoxNow(
 				*maskKind = i;
 			}),
 			QMargins(24, 0, 24, 8));
+		const auto ramka = layout->add(
+			object_ptr<Ui::Checkbox>(
+				layout,
+				U(Mokagram::Lang::Tr("Ramka")),
+				S::Bool(u"quote.ramka"_q),
+				st::defaultCheckbox),
+			QMargins(
+				style::ConvertScale(24),
+				style::ConvertScale(8),
+				style::ConvertScale(24),
+				style::ConvertScale(8)));
+		ramka->checkedChanges() | rpl::on_next([=](bool on) {
+			S::SetBool(u"quote.ramka"_q, on);
+			refresh();
+		}, ramka->lifetime());
 		const auto shadow = layout->add(
 			object_ptr<Ui::Checkbox>(layout, U(Mokagram::Lang::Tr("Тень под карточкой")), S::Bool(u"quote.shadow"_q), st::defaultCheckbox),
 			QMargins(24, 8, 24, 8));

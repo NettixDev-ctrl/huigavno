@@ -17,6 +17,13 @@ namespace Mokagram::Quote {
 
 void RegisterSettings();
 
+// UI thread only. Warms media before rendering; a null image means unavailable.
+void RenderMessageShot(
+	not_null<Window::SessionController*> controller,
+	std::vector<FullMsgId> ids,
+	bool ramka,
+	Fn<void(QImage)> done);
+
 void ShowQuoteBox(
 	not_null<Window::SessionController*> controller,
 	std::vector<FullMsgId> ids);

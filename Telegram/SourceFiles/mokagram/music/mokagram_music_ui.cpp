@@ -138,6 +138,7 @@
 #include <QtCore/QPointer>
 #include <array>
 #include <cmath>
+#include <tuple>
 
 namespace Mokagram::Music {
 namespace {
@@ -2533,6 +2534,17 @@ public:
 				showMenu(controller, playIndex, static_cast<QContextMenuEvent*>(e.get()));
 			}
 		}, lifetime());
+	}
+
+	[[nodiscard]] bool matchesQueueTrack(const Track &track, RowMode mode) const {
+		const auto fields = [](const Track &t) {
+			return std::tie(
+				t.id, t.title, t.artist, t.videoId, t.artworkUrl, t.permalink,
+				t.transcodingUrl, t.authorization, t.extension, t.durationMs,
+				t.hls, t.unavailable, t.artistId, t.artistArtworkUrl, t.genre,
+				t.tags, t.playbackCount, t.likesCount, t.createdAt, t.uploaderName);
+		};
+		return _mode == mode && fields(_track) == fields(track);
 	}
 
 	void setTextLinks(Fn<void(Track)> title, Fn<void(const Track&, const QString&)> artist) {
@@ -7508,26 +7520,18 @@ public:
 		CoversChanged() | rpl::on_next([=] { refresh(); }, lifetime());
 		RecentChanged() | rpl::on_next([=] {
 			if (_tab == Tab::Home && !_homeSection && !_homeAlbumOpen) {
-				crl::on_main(this, [=] {
-					if (_tab == Tab::Home && !_homeSection && !_homeAlbumOpen) {
-						rebuildTab();
-					}
-				});
+				scheduleTabRebuild();
 			}
 		}, lifetime());
 		PlaylistsChanged() | rpl::on_next([=] {
 			if (_tab == Tab::Playlists || (_tab == Tab::Home && _homeArtistOpen)) {
-				QTimer::singleShot(0, this, [=] {
-					if (_tab == Tab::Playlists || (_tab == Tab::Home && _homeArtistOpen)) {
-						rebuildTab();
-					}
-				});
+				scheduleTabRebuild();
 			}
 		}, lifetime());
 		LikesChanged() | rpl::on_next([=] {
 			refresh();
 			if (_tab == Tab::Library || _tab == Tab::Home) {
-				rebuildTab();
+				scheduleTabRebuild();
 			}
 		}, lifetime());
 		MotionChanges() | rpl::on_next([=] {
@@ -8937,7 +8941,7 @@ protected:
 				_controller->showToast(error);
 			}
 			if (_tab == Tab::Playlists) {
-				rebuildTab();
+				scheduleTabRebuild();
 			}
 		}));
 	}
@@ -9467,7 +9471,20 @@ protected:
 		return QRect(layout.center.center().x() - width / 2, top, width, height);
 	}
 
+	void scheduleTabRebuild() {
+		if (_tabRebuildPending) {
+			return;
+		}
+		_tabRebuildPending = true;
+		crl::on_main(this, [=] {
+			if (std::exchange(_tabRebuildPending, false) && !_closing) {
+				rebuildTab();
+			}
+		});
+	}
+
 	void rebuildTab() {
+		_tabRebuildPending = false;
 		_rebuildingTab = true;
 		const auto rebuildingGuard = gsl::finally([&] { _rebuildingTab = false; });
 		const auto keep = (_rebuiltTab == _tab) ? _tabScroll->scrollTop() : 0;
@@ -10047,7 +10064,8 @@ protected:
 	}
 	void refreshQueueViews() {
 		if (showsQueue()) {
-			rebuildTab();
+			fillTabQueue();
+			update();
 		}
 		if (_queuePanelOpen) {
 			refreshQueuePanel();
@@ -10055,6 +10073,7 @@ protected:
 	}
 
 	void fillTabQueue() {
+		_tabNote.clear();
 		fillQueue(_tabList, _tabScroll, _tabContent);
 		if (_tabList->count() == 0) {
 			_tabNote = QString::fromUtf8(Mokagram::Lang::Tr("Очередь пуста."));
@@ -10062,7 +10081,6 @@ protected:
 	}
 
 	void refreshQueuePanel() {
-		_queueList->clear();
 		fillQueue(_queueList, _queueScroll, _queueList);
 		_queuePanel->update();
 	}
@@ -10095,13 +10113,24 @@ protected:
 				}
 			}
 		}
+		const auto mode = inQueue ? RowMode::Queue : RowMode::Context;
 		for (auto i = 0; i != int(tracks.size()); ++i) {
-			list->add(object_ptr<Row>(
+			if (i < list->count()) {
+				const auto row = dynamic_cast<Row*>(list->widgetAt(i).get());
+				if (row && row->matchesQueueTrack(tracks[i], mode)) {
+					continue;
+				}
+				delete list->widgetAt(i).get();
+			}
+			list->insert(i, object_ptr<Row>(
 				list,
 				_controller,
 				tracks[i],
 				i,
-				inQueue ? RowMode::Queue : RowMode::Context));
+				mode));
+		}
+		while (list->count() > int(tracks.size())) {
+			delete list->widgetAt(list->count() - 1).get();
 		}
 		content->resizeToWidth(scroll->width());
 		auto at = inQueue ? queue.index : -1;
@@ -10995,6 +11024,7 @@ private:
 	bool _homeMoreLoading = false;
 	bool _homeMoreCheckQueued = false;
 	bool _rebuildingTab = false;
+	bool _tabRebuildPending = false;
 	bool _homeLoading = false;
 	bool _homeLoaded = false;
 	bool _homeSoundCloudLoading = false;

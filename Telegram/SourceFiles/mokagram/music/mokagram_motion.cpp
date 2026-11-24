@@ -8,10 +8,17 @@
 #include "rpl/event_stream.h"
 #include "ui/toast/toast.h"
 
+#include <crl/crl.h>
+#include <crl/crl_queue.h>
+#include <atomic>
+#include <cstring>
+#include <map>
+
 #include <QtCore/QCryptographicHash>
 #include <QtCore/QDateTime>
 #include <QtCore/QDir>
 #include <QtCore/QFile>
+#include <QtCore/QFileInfo>
 #include <QtCore/QJsonDocument>
 #include <QtCore/QJsonObject>
 #include <QtCore/QPointer>
@@ -69,15 +76,33 @@ QNetworkAccessManager &Network() {
 QString CacheDir() {
 	const auto path = QStandardPaths::writableLocation(QStandardPaths::CacheLocation)
 		+ u"/mokagram_music/motion"_q;
-	QDir().mkpath(path);
 	return path;
 }
 
-void TrimCache() {
+crl::queue &MotionCacheWorker() {
+	static const auto result = new crl::queue();
+	return *result;
+}
+
+// Accessed only by the serial worker, including releases after UI delivery.
+std::map<QString, int> &PendingMotionFiles() {
+	static auto result = std::map<QString, int>();
+	return result;
+}
+
+void TrimCache(const QString &protectPath) {
 	const auto dir = QDir(CacheDir());
 	const auto files = dir.entryInfoList({ u"*.mp4"_q }, QDir::Files, QDir::Time);
 	auto retained = qint64(0);
+	const auto protectedFile = [&](const QFileInfo &file) {
+		return file.absoluteFilePath() == protectPath
+			|| PendingMotionFiles().contains(file.absoluteFilePath());
+	};
 	for (const auto &file : files) {
+		if (protectedFile(file)) retained += file.size();
+	}
+	for (const auto &file : files) {
+		if (protectedFile(file)) continue;
 		retained += file.size();
 		if (retained > 256 * 1024 * 1024) {
 			QFile::remove(file.absoluteFilePath());
@@ -307,10 +332,12 @@ public:
 	}
 
 	~MotionJob() override {
+		_cancelled->store(true, std::memory_order_relaxed);
 		_requests.reset();
 	}
 
 	void cancel() {
+		_cancelled->store(true, std::memory_order_relaxed);
 		_done = nullptr;
 		_requests.reset();
 		deleteLater();
@@ -366,6 +393,7 @@ private:
 
 	void finish() {
 		if (!_done) return;
+		_cancelled->store(true, std::memory_order_relaxed);
 		const auto done = std::move(_done);
 		_requests.reset();
 		deleteLater();
@@ -461,13 +489,14 @@ private:
 
 	void downloadPart() {
 		if (_part == _parts.size()) {
-			_files.artwork = save(u"apple"_q, _video);
-			_video.clear();
-			if (_files.artwork.isEmpty()) {
-				nextAppleAlbum();
-			} else {
-				spotify();
-			}
+			save(u"apple"_q, std::move(_video), [=](QString result) {
+				_files.artwork = std::move(result);
+				if (_files.artwork.isEmpty()) {
+					nextAppleAlbum();
+				} else {
+					spotify();
+				}
+			});
 			return;
 		}
 		const auto part = _parts[_part];
@@ -487,14 +516,40 @@ private:
 		}, {}, {}, {}, range, kMaxVideo - _video.size());
 	}
 
-	QString save(const QString &source, const QByteArray &bytes) {
-		if (bytes.size() < 12 || bytes.size() > kMaxVideo
-			|| bytes.mid(4, 4) != "ftyp") return {};
-		auto file = QSaveFile(path(source));
-		if (!file.open(QIODevice::WriteOnly) || file.write(bytes) != bytes.size()
-			|| !file.commit()) return {};
-		TrimCache();
-		return file.fileName();
+	void save(const QString &source, QByteArray bytes, Fn<void(QString)> done) {
+		const auto target = path(source);
+		const auto weak = QPointer(this);
+		MotionCacheWorker().async([target, weak, cancelled = _cancelled,
+				bytes = std::move(bytes), done = std::move(done)]() mutable {
+			if (cancelled->load(std::memory_order_relaxed)) return;
+			auto result = QString();
+			if (bytes.size() >= 12 && bytes.size() <= kMaxVideo
+				&& !std::memcmp(bytes.constData() + 4, "ftyp", 4)) {
+				QDir().mkpath(QFileInfo(target).absolutePath());
+				auto file = QSaveFile(target);
+				if (file.open(QIODevice::WriteOnly)
+					&& file.write(bytes) == bytes.size()
+					&& !cancelled->load(std::memory_order_relaxed)
+					&& file.commit()) {
+					result = target;
+					++PendingMotionFiles()[target];
+					TrimCache(target);
+				}
+			}
+			crl::on_main([weak, cancelled, result = std::move(result),
+					done = std::move(done)] {
+				if (weak && !cancelled->load(std::memory_order_relaxed)) {
+					done(result);
+				}
+				if (!result.isEmpty()) {
+					MotionCacheWorker().async([result] {
+						auto &pending = PendingMotionFiles();
+						const auto i = pending.find(result);
+						if (--i->second == 0) pending.erase(i);
+					});
+				}
+			});
+		});
 	}
 
 	void spotify() {
@@ -550,12 +605,14 @@ private:
 				const auto url = MotionProtocol::CanvasUrl(bytes, uri);
 				if (url.isEmpty()) { nextCanvas(); return; }
 				Request(_requests.get(), url, [=](QByteArray video, int) {
-					_files.canvas = save(u"spotify"_q, video);
-					if (_files.canvas.isEmpty()) {
-						nextCanvas();
-					} else {
-						finish();
-					}
+					save(u"spotify"_q, std::move(video), [=](QString result) {
+						_files.canvas = std::move(result);
+						if (_files.canvas.isEmpty()) {
+							nextCanvas();
+						} else {
+							finish();
+						}
+					});
 				}, {}, {}, {}, {}, kMaxVideo);
 			}, MotionProtocol::CanvasRequest(uri), "Bearer " + token.toUtf8(),
 			"application/x-protobuf");
@@ -575,6 +632,8 @@ private:
 	std::vector<MotionPart> _parts;
 	qsizetype _part = 0;
 	QByteArray _video;
+	std::shared_ptr<std::atomic<bool>> _cancelled
+		= std::make_shared<std::atomic<bool>>(false);
 	std::unique_ptr<QObject> _requests = std::make_unique<QObject>();
 
 };

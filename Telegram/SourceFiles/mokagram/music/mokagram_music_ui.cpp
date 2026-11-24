@@ -8392,12 +8392,13 @@ protected:
 
 	void openTrackArtist(const Track &track, const QString &name) {
 		const auto generation = ++_artistLinkGeneration;
-		const auto telegram = IsTelegramTrack(track);
+		const auto externalTrack = IsTelegramTrack(track)
+			|| track.id.startsWith(u"yt:"_q);
 		if (_tab == Tab::Home && _homeArtistOpen
 			&& !_homeArtistProfile.id.isEmpty()
 			&& name.simplified().compare(
 				_homeArtistProfile.name.simplified(), Qt::CaseInsensitive) == 0
-			&& (telegram || track.artistId == _homeArtistProfile.id)) {
+			&& (externalTrack || track.artistId == _homeArtistProfile.id)) {
 			return;
 		}
 		const auto tab = _tab;
@@ -8410,7 +8411,7 @@ protected:
 				return;
 			}
 			if (artist.id.isEmpty()) {
-				if (!telegram) {
+				if (!externalTrack) {
 					_controller->showToast(PlaylistText("Профиль «%1» не найден").arg(name));
 					return;
 				}

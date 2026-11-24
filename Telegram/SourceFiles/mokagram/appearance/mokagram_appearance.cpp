@@ -283,7 +283,6 @@ void RegisterSettings() {
 			u"KuGou"_q,
 			u"Genius"_q,
 		},
-		.dependsOn = u"lyrics.enabled"_q,
 	});
 	playerEntry({
 		.key = u"lyrics.offsets"_q,
@@ -303,7 +302,6 @@ void RegisterSettings() {
 			QString::fromUtf8(Mokagram::Lang::Tr("Перевод от источника")),
 			QString::fromUtf8(Mokagram::Lang::Tr("Транслитерация")),
 		},
-		.dependsOn = u"lyrics.enabled"_q,
 	});
 	playerEntry({
 		.key = u"lyrics.plasma"_q,

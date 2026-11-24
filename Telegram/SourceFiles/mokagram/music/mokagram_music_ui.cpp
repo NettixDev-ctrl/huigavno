@@ -3908,13 +3908,28 @@ public:
 			_scroll = Ui::CreateChild<Ui::ScrollArea>(this, st::defaultScrollArea);
 			_content = _scroll->setOwnedWidget(object_ptr<Ui::RpWidget>(_scroll));
 			_scroll->setCustomWheelProcess([=](not_null<QWheelEvent*> event) {
-				auto delta = event->pixelDelta().x();
-				if (!delta) delta = event->angleDelta().x() / 2;
-				if (!delta && event->modifiers().testFlag(Qt::ShiftModifier)) {
-					delta = event->angleDelta().y() / 2;
+				// Keep a trackpad gesture on one axis, including its momentum.
+				auto delta = event->pixelDelta();
+				if (delta.isNull()) {
+					delta = event->angleDelta() / 2;
 				}
-				if (!delta) return false;
-				_scroll->scrollToX(_scroll->scrollLeft() - delta);
+				if (event->modifiers().testFlag(Qt::ShiftModifier)
+					&& std::abs(delta.y()) > std::abs(delta.x())) {
+					delta = QPoint(delta.y(), 0);
+				}
+				const auto axis = _wheelDirectionLock.update(
+					event->phase(), delta).value_or(
+						std::abs(delta.x()) > std::abs(delta.y())
+							? Qt::Horizontal
+							: Qt::Vertical);
+				if (axis != Qt::Horizontal) {
+					// Skip QScrollArea's fallback and let the Home feed scroll.
+					event->ignore();
+					return true;
+				}
+				_slide.stop();
+				_scroll->scrollToX(_scroll->scrollLeft() - delta.x());
+				event->accept();
 				return true;
 			});
 			_scroll->scrolls() | rpl::on_next([=] {
@@ -4038,6 +4053,7 @@ private:
 	HomeEdgeFade *_fadeLeft = nullptr;
 	HomeEdgeFade *_fadeRight = nullptr;
 	Ui::Animations::Simple _slide;
+	Ui::ScrollDirectionLock _wheelDirectionLock;
 	std::vector<Ui::RpWidget*> _items;
 
 };

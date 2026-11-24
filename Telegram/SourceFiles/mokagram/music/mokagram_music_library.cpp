@@ -732,7 +732,7 @@ struct Candidate {
 struct Collector {
 	std::map<QString, Candidate> candidates;
 	int pending = 0;
-	Fn<void()> finish;
+	Fn<void(const Collector&)> finish;
 };
 
 void Gather(
@@ -749,7 +749,8 @@ void Gather(
 		c.seedHits += seedWeight;
 	}
 	if (--collector->pending == 0) {
-		collector->finish();
+		auto finish = std::move(collector->finish);
+		finish(*collector);
 	}
 }
 
@@ -941,9 +942,9 @@ void BuildSimilarImpl(SimilarContext context, Fn<void(std::vector<Track>, QStrin
 	}
 
 	const auto collector = std::make_shared<Collector>();
-	collector->finish = [=] {
+	collector->finish = [=](const Collector &collector) {
 		auto scored = std::vector<std::pair<Track, double>>();
-		for (const auto &[id, c] : collector->candidates) {
+		for (const auto &[id, c] : collector.candidates) {
 			const auto &t = c.track;
 			const auto keys = KeysFor(t);
 			auto skip = false;
@@ -1017,7 +1018,7 @@ void BuildSimilarImpl(SimilarContext context, Fn<void(std::vector<Track>, QStrin
 			++genres[track.genre];
 			result.push_back(track);
 		}
-		if (collector->candidates.empty()) {
+		if (collector.candidates.empty()) {
 			done({}, QString::fromUtf8(Mokagram::Lang::Tr(
 				"Не нашлось похожего по звучанию. Попробуйте позже.")));
 			return;
@@ -1136,7 +1137,7 @@ void BuildImpl(
 	const auto sessionTags = TopKeys(profile->sessionTag, 1, 0.);
 
 	const auto collector = std::make_shared<Collector>();
-	collector->finish = [=] {
+	collector->finish = [=](const Collector &collector) {
 		const auto &lib = Lib();
 		// Жёсткие исключения: уже играет или стоит в очереди, лайкнуто.
 		auto excluded = std::set<QString>();
@@ -1187,7 +1188,7 @@ void BuildImpl(
 			bool known = false;
 		};
 		auto scored = std::vector<Scored>();
-		for (const auto &[id, c] : collector->candidates) {
+		for (const auto &[id, c] : collector.candidates) {
 			const auto &t = c.track;
 			const auto keys = KeysFor(t);
 			auto skip = false;

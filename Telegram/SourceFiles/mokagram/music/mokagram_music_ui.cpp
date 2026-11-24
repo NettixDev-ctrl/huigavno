@@ -2417,6 +2417,7 @@ public:
 	: AbstractButton(parent)
 	, _track(track)
 	, _mode(mode)
+	, _queueIndex(index)
 	, _results(std::move(results))
 	, _homePlaybackControls(homePlaybackControls)
 	, _playlistId(std::move(playlistId)) {
@@ -2537,7 +2538,7 @@ public:
 		}, lifetime());
 	}
 
-	[[nodiscard]] bool matchesQueueTrack(const Track &track, RowMode mode) const {
+	[[nodiscard]] bool matchesQueueTrack(const Track &track, RowMode mode, int index) const {
 		const auto fields = [](const Track &t) {
 			return std::tie(
 				t.id, t.title, t.artist, t.videoId, t.artworkUrl, t.permalink,
@@ -2545,7 +2546,7 @@ public:
 				t.hls, t.unavailable, t.artistId, t.artistArtworkUrl, t.genre,
 				t.tags, t.playbackCount, t.likesCount, t.createdAt, t.uploaderName);
 		};
-		return _mode == mode && fields(_track) == fields(track);
+		return _mode == mode && _queueIndex == index && fields(_track) == fields(track);
 	}
 
 	void setTextLinks(Fn<void(Track)> title, Fn<void(const Track&, const QString&)> artist) {
@@ -2991,6 +2992,7 @@ private:
 	Track _track;
 	QString _playsText;
 	RowMode _mode;
+	const int _queueIndex;
 	std::shared_ptr<std::vector<Track>> _results;
 	bool _catalogStyle = false;
 	bool _homePlaybackControls = true;
@@ -7192,6 +7194,14 @@ public:
 		_queuePanel->hide();
 		_queueList = _queueScroll->setOwnedWidget(
 			object_ptr<Ui::VerticalLayout>(_queueScroll));
+		const auto queueSearchLabel = QString::fromUtf8(Mokagram::Lang::Tr("Поиск в очереди"));
+		_queueSearch = Ui::CreateChild<Ui::InputField>(
+			_queuePanel, st::defaultInputField, rpl::single(queueSearchLabel));
+		_queueSearch->setAccessibleName(queueSearchLabel);
+		_queueSearch->changes() | rpl::on_next([=] {
+			_queueScroll->scrollToY(0);
+			refreshQueuePanel();
+		}, lifetime());
 		_queuePanel->paintOn([=](QPainter &p) {
 			const auto hq = PainterHighQualityEnabler(p);
 			const auto area = _queuePanel->rect();
@@ -7225,12 +7235,15 @@ public:
 				Qt::AlignLeft | Qt::AlignVCenter,
 				queueTitle);
 			if (_queueList->count() == 0) {
+				const auto top = _queueScroll->y();
 				p.setFont(labelFont(15, false));
 				p.setPen(st::windowSubTextFg);
 				p.drawText(
-					QRect(s(16), s(48), std::max(_queuePanel->width() - s(32), 0), s(48)),
+					QRect(s(16), top, std::max(_queuePanel->width() - s(32), 0), s(48)),
 					Qt::AlignLeft | Qt::AlignTop | Qt::TextWordWrap,
-					QString::fromUtf8(Mokagram::Lang::Tr("Очередь пуста.")));
+					QString::fromUtf8(Mokagram::Lang::Tr(
+						_queueSearch->getLastText().trimmed().isEmpty()
+							? "Очередь пуста." : "Ничего не найдено")));
 			}
 		});
 		_shuffle->resize(s(36), s(36));
@@ -8278,9 +8291,12 @@ protected:
 			_queuePanel->setGeometry(geometry);
 			_queuePanel->update();
 		}
+		_queueSearch->resizeToWidth(std::max(target.width() - s(32), 1));
+		_queueSearch->moveToLeft(s(16), s(48));
+		const auto scrollTop = _queueSearch->geometry().bottom() + s(9);
 		_queueScroll->setGeometry(
-			s(8), s(48), std::max(target.width() - s(16), 0),
-			std::max(target.height() - s(60), 0));
+			s(8), scrollTop, std::max(target.width() - s(16), 0),
+			std::max(target.height() - scrollTop - s(12), 0));
 		if (_queueList->width() != _queueScroll->width()) {
 			_queueList->resizeToWidth(_queueScroll->width());
 		}
@@ -10182,14 +10198,15 @@ protected:
 	}
 
 	void refreshQueuePanel() {
-		fillQueue(_queueList, _queueScroll, _queueList);
+		fillQueue(_queueList, _queueScroll, _queueList, _queueSearch->getLastText());
 		_queuePanel->update();
 	}
 
 	void fillQueue(
 		not_null<Ui::VerticalLayout*> list,
 		not_null<Ui::ScrollArea*> scroll,
-		not_null<Ui::RpWidget*> content) {
+		not_null<Ui::RpWidget*> content,
+		const QString &query = {}) {
 		const auto &queue = QueueState();
 		const auto playingId = PlayingTrack().id;
 		const auto inQueue = playingId.isEmpty()
@@ -10215,34 +10232,44 @@ protected:
 			}
 		}
 		const auto mode = inQueue ? RowMode::Queue : RowMode::Context;
+		const auto terms = query.simplified().split(' ', Qt::SkipEmptyParts);
+		auto shown = 0;
+		auto active = -1;
 		for (auto i = 0; i != int(tracks.size()); ++i) {
-			if (i < list->count()) {
-				const auto row = dynamic_cast<Row*>(list->widgetAt(i).get());
-				if (row && row->matchesQueueTrack(tracks[i], mode)) {
+			const auto &track = tracks[i];
+			if (!terms.empty()) {
+				const auto text = track.title + u" "_q + track.artist;
+				if (!std::ranges::all_of(terms, [&](const auto &term) {
+					return text.contains(term, Qt::CaseInsensitive);
+				})) {
 					continue;
 				}
-				delete list->widgetAt(i).get();
 			}
-			list->insert(i, object_ptr<Row>(
+			const auto rowIndex = shown++;
+			if (active < 0 && (inQueue ? i == queue.index : track.id == playingId)) {
+				active = rowIndex;
+			}
+			if (rowIndex < list->count()) {
+				const auto existing = list->widgetAt(rowIndex).get();
+				const auto row = dynamic_cast<Row*>(existing);
+				if (row && row->matchesQueueTrack(track, mode, i)) {
+					continue;
+				}
+				delete existing;
+			}
+			list->insert(rowIndex, object_ptr<Row>(
 				list,
 				_controller,
-				tracks[i],
+				track,
 				i,
 				mode));
 		}
-		while (list->count() > int(tracks.size())) {
+		while (list->count() > shown) {
 			delete list->widgetAt(list->count() - 1).get();
 		}
 		content->resizeToWidth(scroll->width());
-		auto at = inQueue ? queue.index : -1;
-		for (auto i = 0; !inQueue && i != int(tracks.size()); ++i) {
-			if (tracks[i].id == playingId) {
-				at = i;
-				break;
-			}
-		}
-		if (at >= 0 && at < list->count()) {
-			scroll->scrollToY(list->widgetAt(std::max(at - 1, 0))->y());
+		if (terms.empty() && active >= 0) {
+			scroll->scrollToY(list->widgetAt(std::max(active - 1, 0))->y());
 		}
 	}
 
@@ -10989,6 +11016,7 @@ private:
 	const not_null<Ui::ScrollArea*> _tabScroll;
 	const not_null<Ui::RpWidget*> _queuePanel;
 	const not_null<Ui::ScrollArea*> _queueScroll;
+	Ui::InputField *_queueSearch = nullptr;
 	Ui::VerticalLayout *_queueList = nullptr;
 	bool _queuePanelOpen = false;
 	Ui::Animations::Simple _queueSlide;

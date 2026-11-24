@@ -4085,48 +4085,6 @@ private:
 
 };
 
-// Название открытого альбома и возврат к результатам.
-class SearchCollectionBar final : public Ui::AbstractButton {
-public:
-	SearchCollectionBar(QWidget *parent, const QString &title, Fn<void()> back)
-	: AbstractButton(parent)
-	, _title(title) {
-		resize(width(), style::ConvertScale(40));
-		setPointerCursor(true);
-		setFocusPolicy(Qt::TabFocus);
-		setAccessibleName(PlaylistText("Назад") + u": "_q + title);
-		setClickedCallback(std::move(back));
-		paintRequest(
-		) | rpl::on_next([=](QRect) {
-			auto p = QPainter(this);
-			auto hq = PainterHighQualityEnabler(p);
-			const auto s = [](int value) { return style::ConvertScale(value); };
-			const auto onBack = isOver() || hasFocus();
-			p.setPen(QPen(
-				onBack ? st::windowFg : st::windowSubTextFg,
-				s(2),
-				Qt::SolidLine,
-				Qt::RoundCap,
-				Qt::RoundJoin));
-			const auto cy = height() / 2.;
-			p.drawPolyline(QPolygonF({
-				QPointF(s(16), cy - s(6)),
-				QPointF(s(10), cy),
-				QPointF(s(16), cy + s(6)) }));
-			const auto available = std::max(width() - s(38), 0);
-			p.setFont(st::semiboldFont);
-			p.setPen(st::windowFg);
-			p.drawText(
-				QRect(s(26), 0, available, height()),
-				Qt::AlignVCenter | Qt::AlignLeft,
-				st::semiboldFont->elided(_title, available));
-		}, lifetime());
-	}
-
-private:
-	QString _title;
-
-};
 
 enum class CatalogArtwork { Artist, Playlist, Release };
 
@@ -7146,9 +7104,9 @@ public:
 			nullptr,
 			[=] { return headerControlBackground(); });
 		_homeBack->setClickedCallback(crl::guard(this, [=] {
-			if (_homeArtistBackToSearch && _homeArtistOpen) {
+			if (_homeBackToSearch && !_homeReturnToArtist) {
 				setTab(Tab::Search);
-				_tabScroll->scrollToY(_searchArtistReturnScroll);
+				_tabScroll->scrollToY(_searchReturnScroll);
 				return;
 			}
 			if (_homeReturnToArtist) {
@@ -7390,7 +7348,6 @@ public:
 			_searchIndicator->setLoading(false);
 			_searchPending = !_searchField->text().trimmed().isEmpty();
 			_searchFailed = false;
-			_searchCollectionTitle.clear();
 			_searchTracks.clear();
 			_catalogItems.clear();
 			resetCatalogFilters();
@@ -8481,26 +8438,11 @@ protected:
 		setCatalogFilterAvailability(available);
 	}
 
-	void openCatalogCollection(const Album &album) {
-		_searchCollectionScroll = _tabScroll->scrollTop();
-		_searchCollectionTitle = album.title;
-		_searchCollectionTracks.clear();
-		_searchCollectionStatus.clear();
-		_searchCollectionLoading = true;
-		const auto generation = ++_searchGen;
-		rebuildTab();
-		_tabScroll->scrollToY(0);
-		AlbumTracks(album.id, crl::guard(this, [=](std::vector<Track> tracks, QString error) {
-			if (generation != _searchGen) {
-				return;
-			}
-			_searchCollectionLoading = false;
-			_searchCollectionTracks = std::move(tracks);
-			_searchCollectionStatus = std::move(error);
-			if (_tab == Tab::Search) {
-				rebuildTab();
-			}
-		}));
+	void openCatalogCollection(Album album) {
+		_searchReturnScroll = _tabScroll->scrollTop();
+		setTab(Tab::Home);
+		_homeBackToSearch = true;
+		openHomeAlbum(std::move(album));
 	}
 
 	void setResultTrackLinks(not_null<Row*> row) {
@@ -8517,11 +8459,11 @@ protected:
 	void showArtistProfile(ArtistInfo artist, Track track = {}) {
 		const auto fromSearch = (_tab == Tab::Search);
 		if (fromSearch) {
-			_searchArtistReturnScroll = _tabScroll->scrollTop();
+			_searchReturnScroll = _tabScroll->scrollTop();
 		}
 		setTab(Tab::Home);
 		if (fromSearch) {
-			_homeArtistBackToSearch = true;
+			_homeBackToSearch = true;
 		}
 		openHomeArtist(std::move(artist), std::move(track));
 	}
@@ -8677,7 +8619,6 @@ protected:
 		_searchPending = !query.isEmpty() || (_searchChats && _searchChat);
 		_searchIndicator->setLoading(_searchPending);
 		_searchFailed = false;
-		_searchCollectionTitle.clear();
 		_searchTracks.clear();
 		_catalogItems.clear();
 		_chatSearch = nullptr;
@@ -8843,7 +8784,7 @@ protected:
 		_homeAlbumOpen = false;
 		_homeArtistOpen = false;
 		_homeReturnToArtist = false;
-		_homeArtistBackToSearch = false;
+		_homeBackToSearch = false;
 		++_artistLinkGeneration;
 		_nav[1]->setActiveColor(Qt::white);
 		++_homeAlbumGeneration;
@@ -10015,24 +9956,6 @@ protected:
 					? std::nullopt
 					: std::make_optional(_searchCategory);
 				_tabList->add(object_ptr<SearchSkeleton>(_tabList, _tabScroll, category));
-			} else if (!_searchCollectionTitle.isEmpty()) {
-				const auto header = _tabList->add(object_ptr<SearchCollectionBar>(
-					_tabList, _searchCollectionTitle, crl::guard(this, [=] {
-						_searchCollectionTitle.clear();
-						++_searchGen;
-						rebuildTab();
-						_tabScroll->scrollToY(_searchCollectionScroll);
-					})));
-				if (_searchCollectionLoading) {
-					_tabList->add(object_ptr<SearchSkeleton>(
-						_tabList, _tabScroll, std::nullopt, header->height()));
-				} else if (_searchCollectionTracks.empty()) {
-					_tabNote = _searchCollectionStatus.isEmpty()
-						? tr("В подборке нет доступных треков")
-						: _searchCollectionStatus;
-				} else {
-					addRows(_searchCollectionTracks, RowMode::Album);
-				}
 			} else if (!_searchChats && !_catalogItems.empty()) {
 				fillCatalogResults();
 			} else if (_searchTracks.empty()) {
@@ -10128,8 +10051,7 @@ protected:
 			for (const auto child : _tabList->children()) {
 				if (auto widget = qobject_cast<QWidget*>(child); widget && widget->isEnabled()
 					&& (dynamic_cast<Row*>(widget)
-						|| dynamic_cast<CatalogEntityRow*>(widget)
-						|| dynamic_cast<SearchCollectionBar*>(widget))) {
+						|| dynamic_cast<CatalogEntityRow*>(widget))) {
 					_searchResultWidgets.push_back(widget);
 					widget->installEventFilter(this);
 				}
@@ -10358,7 +10280,7 @@ protected:
 				p.setPen(st::windowSubTextFg);
 				const auto noteWidth = std::max(layout.center.width() - s(20), 0);
 				p.drawText(
-					QRect(layout.center.x() + s(10), layout.scrollTop + ((_tab == Tab::Playlists) ? s(64) : (_tab == Tab::Search && !_searchCollectionTitle.isEmpty()) ? s(40) : 0), noteWidth, s(80)),
+					QRect(layout.center.x() + s(10), layout.scrollTop + ((_tab == Tab::Playlists) ? s(64) : 0), noteWidth, s(80)),
 					Qt::AlignLeft | Qt::AlignTop | Qt::TextWordWrap,
 					_tabNote);
 			}
@@ -11039,12 +10961,7 @@ private:
 	std::array<bool, 5> _searchFilterAvailable = {};
 	SearchCategory _searchCategory = SearchCategory::All;
 	std::vector<CatalogItem> _catalogItems;
-	std::vector<Track> _searchCollectionTracks;
-	QString _searchCollectionTitle;
-	QString _searchCollectionStatus;
-	int _searchCollectionScroll = 0;
 	int _searchArtistReturnScroll = 0;
-	bool _searchCollectionLoading = false;
 	bool _homeArtistBackToSearch = false;
 	QTimer _searchTimer;
 	std::unique_ptr<ChatMusicSearch> _chatSearch;

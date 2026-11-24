@@ -359,6 +359,7 @@ private:
 #ifdef Q_OS_MAC
 	base::Timer _barsTimer;
 	base::Timer _proximityTimer;
+	QRect _desktopArea;
 #endif
 	base::unique_qptr<Ui::PopupMenu> _menu;
 	std::shared_ptr<Data::DocumentMedia> _media;
@@ -505,6 +506,7 @@ Island::Island(
 		relayout();
 	}, lifetime());
 
+	relayout();
 	refreshTrack();
 	refreshState(instance->getState(kType));
 }
@@ -550,7 +552,7 @@ int Island::expandedWidth() const {
 		? S(kExpandedWidth)
 		: _notchSize.width() + S(206);
 	return std::max(S(kCompactMinWidth), std::min(
-		target, DesktopIslandArea().width() - S(24)));
+		target, _desktopArea.width() - S(24)));
 #else
 	return std::max(
 		std::min(S(kExpandedWidth), _anchor->width() - S(24)),
@@ -753,6 +755,10 @@ bool Island::frame() {
 }
 
 void Island::relayout() {
+#ifdef Q_OS_MAC
+	_desktopArea = DesktopIslandArea();
+	_notchSize = DesktopIslandNotchSize();
+#endif
 	if (!_shown && isHidden()) {
 		return;
 	}
@@ -761,8 +767,7 @@ void Island::relayout() {
 		return;
 	}
 #ifdef Q_OS_MAC
-	_notchSize = DesktopIslandNotchSize();
-	const auto area = DesktopIslandArea();
+	const auto area = _desktopArea;
 	if (area.isEmpty()) {
 		hide();
 		return;

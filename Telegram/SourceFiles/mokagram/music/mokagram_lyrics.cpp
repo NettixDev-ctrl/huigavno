@@ -378,9 +378,13 @@ void RequestWordLyrics(
 		const QString &title,
 		const QString &artist,
 		qint64 durationMs,
-		Fn<void(Lyrics)> done) {
+		Fn<void(Lyrics)> done,
+		Fn<void()> cacheMiss = nullptr) {
 	if (title.isEmpty() || artist.isEmpty() || durationMs <= 0) {
 		done({});
+		if (cacheMiss) {
+			cacheMiss();
+		}
 		return;
 	}
 	const auto path = WordLyricsPath(title, artist, durationMs);
@@ -398,6 +402,9 @@ void RequestWordLyrics(
 				done(result);
 			} else {
 				RequestWordLyricsOnline(title, artist, durationMs, path, done);
+				if (cacheMiss) {
+					cacheMiss();
+				}
 			}
 		});
 	});
@@ -1236,26 +1243,16 @@ void FetchLyrics(
 			lookup->fallback = std::move(result);
 		}
 	};
-	RequestWordLyrics(trackName, artistName, durationMs, [=](Lyrics result) {
+	const auto timed = [=](Lyrics result) {
 		lookup->timedFinished = true;
 		if (result.found) {
 			deliver(std::move(result));
 		} else if (lookup->fallback) {
 			deliver(std::move(*lookup->fallback));
 		}
-	});
-	Request(first, durationMs, [=](Lyrics result) {
-		if (result.found) {
-			finish(std::move(result));
-			return;
-		}
-		if (result.unavailable) {
-			RequestFallback(trackName, artistName, durationMs, finish, true);
-			return;
-		}
-		auto second = QUrlQuery();
-		second.addQueryItem(u"q"_q, artistName + u" "_q + trackName);
-		Request(second, durationMs, [=](Lyrics result) {
+	};
+	const auto basic = [=] {
+		Request(first, durationMs, [=](Lyrics result) {
 			if (result.found) {
 				finish(std::move(result));
 				return;
@@ -1264,45 +1261,58 @@ void FetchLyrics(
 				RequestFallback(trackName, artistName, durationMs, finish, true);
 				return;
 			}
-			if (artistName == artist) {
-				RequestFallback(trackName, artistName, durationMs, [=](Lyrics result) {
-					if (result.found) {
-						finish(std::move(result));
-					} else {
-						RequestLastResort(split, durationMs, [=](Lyrics result) {
-							if (result.found) {
-								finish(std::move(result));
-							} else {
-								RequestGenius(split, artist, finish);
-							}
-						});
-					}
-				});
-				return;
-			}
-			auto third = QUrlQuery();
-			third.addQueryItem(u"q"_q, clean);
-			Request(third, durationMs, [=](Lyrics result) {
+			auto second = QUrlQuery();
+			second.addQueryItem(u"q"_q, artistName + u" "_q + trackName);
+			Request(second, durationMs, [=](Lyrics result) {
 				if (result.found) {
 					finish(std::move(result));
 					return;
 				}
-				RequestFallback(trackName, artistName, durationMs, [=](Lyrics result) {
+				if (result.unavailable) {
+					RequestFallback(trackName, artistName, durationMs, finish, true);
+					return;
+				}
+				if (artistName == artist) {
+					RequestFallback(trackName, artistName, durationMs, [=](Lyrics result) {
+						if (result.found) {
+							finish(std::move(result));
+						} else {
+							RequestLastResort(split, durationMs, [=](Lyrics result) {
+								if (result.found) {
+									finish(std::move(result));
+								} else {
+									RequestGenius(split, artist, finish);
+								}
+							});
+						}
+					});
+					return;
+				}
+				auto third = QUrlQuery();
+				third.addQueryItem(u"q"_q, clean);
+				Request(third, durationMs, [=](Lyrics result) {
 					if (result.found) {
 						finish(std::move(result));
-					} else {
-						RequestLastResort(split, durationMs, [=](Lyrics result) {
-							if (result.found) {
-								finish(std::move(result));
-							} else {
-								RequestGenius(split, artist, finish);
-							}
-					});
+						return;
 					}
-				}, result.unavailable);
+					RequestFallback(trackName, artistName, durationMs, [=](Lyrics result) {
+						if (result.found) {
+							finish(std::move(result));
+						} else {
+							RequestLastResort(split, durationMs, [=](Lyrics result) {
+								if (result.found) {
+									finish(std::move(result));
+								} else {
+									RequestGenius(split, artist, finish);
+								}
+						});
+						}
+					}, result.unavailable);
+				});
 			});
 		});
-	});
+	};
+	RequestWordLyrics(trackName, artistName, durationMs, timed, basic);
 }
 
 void FetchArtwork(

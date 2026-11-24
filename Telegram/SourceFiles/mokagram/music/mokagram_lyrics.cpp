@@ -20,6 +20,7 @@
 #include <QtNetwork/QNetworkRequest>
 
 #include "logs.h"
+#include "mokagram/settings/mokagram_settings.h"
 
 #include <crl/crl.h>
 #include <QtGui/QImage>
@@ -363,6 +364,9 @@ void RequestWordLyricsOnline(
 			: QByteArray();
 		auto result = ParseWordLyrics(
 			QJsonDocument::fromJson(bytes).object(), title, artist, durationMs);
+		result.unavailable = !result.found
+			&& reply->error() != QNetworkReply::NoError
+			&& reply->error() != QNetworkReply::ContentNotFoundError;
 		if (result.found) {
 			SaveWordLyrics(path, std::move(bytes));
 		}
@@ -1160,24 +1164,27 @@ void FetchLyrics(
 		const QString &artist,
 		qint64 durationMs,
 		Fn<void(Lyrics)> done) {
+	enum class Source { Auto, LrcLib, LrcMux, NetEase, KuGou, Genius };
+	const auto source = Source(Settings::Int(u"lyrics.provider"_q));
+	const auto key = cacheKey + u"/"_q + QString::number(int(source));
 	auto &cache = Cache();
-	if (const auto i = cache.find(cacheKey); i != cache.end()) {
+	if (const auto i = cache.find(key); i != cache.end()) {
 		done(i->second);
 		return;
 	}
 	auto &pending = Pending();
-	if (const auto i = pending.find(cacheKey); i != pending.end()) {
+	if (const auto i = pending.find(key); i != pending.end()) {
 		i->second.push_back(std::move(done));
 		return;
 	}
-	pending[cacheKey].push_back(std::move(done));
+	pending[key].push_back(std::move(done));
 	const auto split = SplitName(title, artist);
 	const auto clean = split.clean;
 	const auto trackName = split.trackName;
 	const auto artistName = split.artistName;
 	const auto deliver = [=](Lyrics result) {
 		auto &pending = Pending();
-		const auto i = pending.find(cacheKey);
+		const auto i = pending.find(key);
 		if (i == pending.end()) {
 			return;
 		}
@@ -1186,7 +1193,7 @@ void FetchLyrics(
 			if (cache.size() >= 64) {
 				cache.erase(cache.begin());
 			}
-			cache[cacheKey] = result;
+			cache[key] = result;
 		}
 		const auto waiting = std::move(i->second);
 		pending.erase(i);
@@ -1194,6 +1201,29 @@ void FetchLyrics(
 			callback(result);
 		}
 	};
+	auto first = QUrlQuery();
+	first.addQueryItem(u"track_name"_q, trackName);
+	first.addQueryItem(u"artist_name"_q, artistName);
+	switch (source) {
+	case Source::LrcLib:
+		Request(first, durationMs, deliver);
+		return;
+	case Source::LrcMux:
+		RequestWordLyrics(trackName, artistName, durationMs, deliver);
+		return;
+	case Source::NetEase:
+		RequestNetease(artistName + u" "_q + trackName, trackName,
+			artistName, durationMs, deliver);
+		return;
+	case Source::KuGou:
+		RequestKugou(trackName, artistName, durationMs, deliver);
+		return;
+	case Source::Genius:
+		RequestGenius(split, artist, deliver);
+		return;
+	case Source::Auto:
+		break;
+	}
 	struct Lookup {
 		std::optional<Lyrics> fallback;
 		bool timedFinished = false;
@@ -1214,9 +1244,6 @@ void FetchLyrics(
 			deliver(std::move(*lookup->fallback));
 		}
 	});
-	auto first = QUrlQuery();
-	first.addQueryItem(u"track_name"_q, trackName);
-	first.addQueryItem(u"artist_name"_q, artistName);
 	Request(first, durationMs, [=](Lyrics result) {
 		if (result.found) {
 			finish(std::move(result));

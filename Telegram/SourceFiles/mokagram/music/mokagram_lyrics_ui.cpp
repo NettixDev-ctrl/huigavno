@@ -1301,6 +1301,8 @@ public:
 		) | rpl::on_next([=](const QString &key) {
 			if (key == u"lyrics.plasma"_q) {
 				_view->setCoverTint(Mokagram::Settings::Bool(key));
+			} else if (key == u"lyrics.provider"_q) {
+				refresh();
 			} else if (key == u"lyrics.enabled"_q
 				&& !Mokagram::Settings::Bool(key)) {
 				deleteLater();
@@ -1429,10 +1431,12 @@ private:
 				|| state.state == Media::Player::State::Resuming),
 			state.id.changeablePlaybackSpeed()
 				? Core::App().settings().audioPlaybackSpeed() : 1.);
-		if (_lyricsFor == track.id) {
+		const auto provider = Settings::Int(u"lyrics.provider"_q);
+		if (_lyricsFor == track.id && _lyricsProvider == provider) {
 			return;
 		}
 		_lyricsFor = track.id;
+		_lyricsProvider = provider;
 		_view->setCommentsTrack(QString());
 		ResolveCommentsTrack(track, crl::guard(this, [=, id = track.id](QString sc) {
 			if (_lyricsFor == id) _view->setCommentsTrack(sc);
@@ -1445,7 +1449,7 @@ private:
 			track.artist,
 			track.durationMs,
 			crl::guard(this, [=](Lyrics lyrics) {
-				if (_lyricsFor == id) {
+				if (_lyricsFor == id && _lyricsProvider == provider) {
 					_view->setLyrics(std::move(lyrics));
 				}
 			}));
@@ -1457,6 +1461,7 @@ private:
 	Ui::AbstractButton *_close = nullptr;
 	Ui::ResizeArea *_resize = nullptr;
 	QString _lyricsFor;
+	int _lyricsProvider = 0;
 	QString _title;
 	QString _artist;
 
@@ -1476,6 +1481,7 @@ private:
 // Есть ли текст у играющего трека (для состояния кнопки в панели плеера).
 struct LyricsAvailability {
 	QString id;
+	int provider = 0;
 	bool found = false;
 	bool started = false;
 	rpl::event_stream<> changes;
@@ -1490,10 +1496,12 @@ struct LyricsAvailability {
 void RefreshAvailability() {
 	auto &state = Availability();
 	const auto track = PlayingTrack();
-	if (state.id == track.id) {
+	const auto provider = Settings::Int(u"lyrics.provider"_q);
+	if (state.id == track.id && state.provider == provider) {
 		return;
 	}
 	state.id = track.id;
+	state.provider = provider;
 	state.found = false;
 	state.changes.fire({});
 	if (track.id.isEmpty()) {
@@ -1507,7 +1515,7 @@ void RefreshAvailability() {
 		track.durationMs,
 		[=](Lyrics lyrics) {
 			auto &state = Availability();
-			if (state.id == id && state.found != lyrics.found) {
+			if (state.id == id && state.provider == provider && state.found != lyrics.found) {
 				state.found = lyrics.found;
 				state.changes.fire({});
 			}
@@ -1610,6 +1618,11 @@ rpl::producer<> LyricsAvailabilityChanges() {
 		) | rpl::on_next(RefreshAvailability, state.lifetime);
 		QueueChanges(
 		) | rpl::on_next(RefreshAvailability, state.lifetime);
+		Settings::Changed() | rpl::on_next([](const QString &key) {
+			if (key == u"lyrics.provider"_q) {
+				RefreshAvailability();
+			}
+		}, state.lifetime);
 		RefreshAvailability();
 	}
 	return state.changes.events();

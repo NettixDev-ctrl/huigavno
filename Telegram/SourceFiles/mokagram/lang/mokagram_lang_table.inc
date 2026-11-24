@@ -940,6 +940,8 @@
 	{ "Тег у собеседника: виден в списке чатов и под именем (.tag клиент, пусто = убрать)", "A tag for a contact: shown in the chat list and under the name (.tag client, empty = remove)" },
 	{ "Тег убран", "Tag removed" },
 	{ "Текст песни", "Song lyrics" },
+	{ "Источник текста песни", "Lyrics source" },
+	{ "Автоматический выбор", "Automatic selection" },
 	{ "Подстрочник песни", "Lyrics subtitles" },
 	{ "Показывается, когда источник прислал перевод или транслитерацию.", "Shown when the lyrics source provides a translation or romanization." },
 	{ "Только оригинал", "Original only" },

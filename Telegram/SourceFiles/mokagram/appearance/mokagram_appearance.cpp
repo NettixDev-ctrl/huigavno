@@ -271,6 +271,21 @@ void RegisterSettings() {
 		.hidden = true,
 	});
 	playerEntry({
+		.key = u"lyrics.provider"_q,
+		.title = QString::fromUtf8(Mokagram::Lang::Tr("Источник текста песни")),
+		.kind = S::Kind::Choice,
+		.defaultValue = 0,
+		.choices = {
+			QString::fromUtf8(Mokagram::Lang::Tr("Автоматический выбор")),
+			u"LRCLIB"_q,
+			u"LRCMux"_q,
+			u"NetEase"_q,
+			u"KuGou"_q,
+			u"Genius"_q,
+		},
+		.dependsOn = u"lyrics.enabled"_q,
+	});
+	playerEntry({
 		.key = u"lyrics.offsets"_q,
 		.title = u"lyrics.offsets"_q,
 		.kind = S::Kind::String,

@@ -7600,7 +7600,9 @@ public:
 				}
 				return;
 			}
-			if (key.startsWith(u"player."_q)) {
+			if (key == u"lyrics.provider"_q) {
+				refresh();
+			} else if (key.startsWith(u"player."_q)) {
 				if (key == u"player.motion_covers"_q || key == u"player.spotify_canvas"_q) {
 					_motionFor.clear();
 					_motionCover = nullptr;
@@ -11056,8 +11058,10 @@ private:
 			_queueFor = track.id;
 			refreshQueueViews();
 		}
-		if (_lyricsFor != track.id) {
+		const auto provider = Settings::Int(u"lyrics.provider"_q);
+		if (_lyricsFor != track.id || _lyricsProvider != provider) {
 			_lyricsFor = track.id;
+			_lyricsProvider = provider;
 			if (std::exchange(_lyricsMissing, false) && _tab == Tab::Now) {
 				relayout();
 				rebuildTab();
@@ -11074,7 +11078,7 @@ private:
 				track.artist,
 				track.durationMs,
 				crl::guard(this, [=](Lyrics lyrics) {
-					if (_lyricsFor == id) {
+					if (_lyricsFor == id && _lyricsProvider == provider) {
 						_lyricsMissing = !lyrics.found || lyrics.lines.empty();
 						_view->setLyrics(std::move(lyrics));
 						if (_tab == Tab::Now) {
@@ -11320,6 +11324,7 @@ private:
 	QString _timeNow = u"0:00"_q;
 	QString _timeTotal = u"0:00"_q;
 	QString _lyricsFor;
+	int _lyricsProvider = 0;
 	bool _isPlaying = true;
 	bool _closing = false;
 	InfoHover _hover = InfoHover::None;

@@ -8382,22 +8382,30 @@ protected:
 	}
 
 	void openTrackArtist(const Track &track, const QString &name) {
-		if (IsTelegramTrack(track)) {
-			showArtistProfile({ {}, name, track.artistArtworkUrl, {} }, track);
+		const auto generation = ++_artistLinkGeneration;
+		const auto telegram = IsTelegramTrack(track);
+		if (_tab == Tab::Home && _homeArtistOpen
+			&& !_homeArtistProfile.id.isEmpty()
+			&& name.simplified().compare(
+				_homeArtistProfile.name.simplified(), Qt::CaseInsensitive) == 0
+			&& (telegram || track.artistId == _homeArtistProfile.id)) {
 			return;
 		}
-		const auto generation = ++_artistLinkGeneration;
+		const auto tab = _tab;
 		const auto searchGeneration = _searchGen;
 		const auto homeGeneration = _homeAlbumGeneration;
 		ResolveTrackArtist(track, name, crl::guard(this, [=, seed = track](ArtistInfo artist) {
-			if (generation != _artistLinkGeneration
-				|| (_tab == Tab::Search && searchGeneration != _searchGen)
-				|| (_tab == Tab::Home && homeGeneration != _homeAlbumGeneration)) {
+			if (generation != _artistLinkGeneration || tab != _tab
+				|| searchGeneration != _searchGen
+				|| homeGeneration != _homeAlbumGeneration) {
 				return;
 			}
 			if (artist.id.isEmpty()) {
-				_controller->showToast(PlaylistText("Профиль «%1» не найден").arg(name));
-				return;
+				if (!telegram) {
+					_controller->showToast(PlaylistText("Профиль «%1» не найден").arg(name));
+					return;
+				}
+				artist = { {}, name, seed.artistArtworkUrl, {} };
 			}
 			showArtistProfile(std::move(artist), seed);
 		}));

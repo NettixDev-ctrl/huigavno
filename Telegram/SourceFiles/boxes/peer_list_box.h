@@ -140,6 +140,11 @@ public:
 		int outerWidth,
 		bool selected);
 
+	// Mokagram: область значка перед именем для подсказки.
+	[[nodiscard]] QRect leadingBadgeRect() const {
+		return _leadingBadgeRect;
+	}
+
 	[[nodiscard]] QRect statusIconRect() const {
 		return _statusIconRect;
 	}
@@ -339,6 +344,7 @@ private:
 	Ui::Text::String _status;
 	Ui::PeerBadge _badge;
 	QRect _statusIconRect;
+	QRect _leadingBadgeRect;
 	StatusType _statusType = StatusType::Online;
 	crl::time _statusValidTill = 0;
 	base::flat_set<QChar> _nameFirstLetters;

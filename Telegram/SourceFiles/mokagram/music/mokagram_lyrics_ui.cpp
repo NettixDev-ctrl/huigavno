@@ -686,6 +686,7 @@ void LyricsView::mousePressEvent(QMouseEvent *e) {
 	if (const auto index = lineAt(e->pos().y()); index >= 0) {
 		const auto &lyric = _lyrics.lines[index];
 		const auto seek = [&](qint64 time) {
+			followPlayback();
 			_lineClicked.fire_copy(std::max<qint64>(0, time - _timingOffset));
 		};
 		const auto &layout = *layoutOf(index).main;
@@ -929,6 +930,9 @@ void LyricsView::tick() {
 			return 0.;
 		}
 		const auto &word = *std::prev(next);
+		if (next == line.words.end() && at >= word.endMs) {
+			return 1.;
+		}
 		const auto progress = std::clamp(
 			(at - word.startMs) / double(word.endMs - word.startMs), 0., 1.);
 		return (word.from + (word.to - word.from) * progress) / line.text.size();

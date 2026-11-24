@@ -9957,7 +9957,7 @@ protected:
 				auto background = QLinearGradient(0, -offset, 0, end);
 				background.setColorAt(0., tone);
 				background.setColorAt(1., st::boxBg->c);
-				const auto header = QRect(_tabScroll->x(), 0, _tabScroll->width(), end);
+				const auto header = QRect(0, 0, width(), end);
 				p.fillRect(e->rect().intersected(header), background);
 			}
 		} else if (artistHeader) {

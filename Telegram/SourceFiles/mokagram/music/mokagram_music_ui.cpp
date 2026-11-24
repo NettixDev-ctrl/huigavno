@@ -99,6 +99,7 @@
 #include "ui/ui_utility.h"
 #include "ui/power_saving.h"
 #include "ui/text/format_song_document_name.h"
+#include "ui/text/format_values.h"
 #include "ui/toast/toast.h"
 #include "ui/vertical_list.h"
 #include "styles/style_chat.h"
@@ -12332,7 +12333,8 @@ void ShowCurrentTrackMenu(
 	add(QString::fromUtf8(Mokagram::Lang::Tr("Пауза / играть")), [=] {
 		instance->playPause(AudioMsgId::Type::Song);
 	}, &st::menuIconSoundOn);
-	if (instance->current(AudioMsgId::Type::Song).changeablePlaybackSpeed()) {
+	const auto audioId = instance->current(AudioMsgId::Type::Song);
+	if (audioId.changeablePlaybackSpeed()) {
 		const auto currentSpeed = Core::App().settings().audioPlaybackSpeed();
 		const auto speedText = [](double rate) {
 			return QLocale().toString(rate, 'g', 3) + u"×"_q;
@@ -12351,6 +12353,36 @@ void ShowCurrentTrackMenu(
 			tr::lng_mediaview_playback_speed(tr::now) + u" · "_q + speedText(currentSpeed),
 			std::move(submenu),
 			nullptr);
+	}
+	if (const auto document = audioId.audio()) {
+		auto info = std::make_unique<Ui::PopupMenu>(menu.get(), st::popupMenuWithIcons);
+		const auto addInfo = [&](const char *label, const QString &value) {
+			if (!value.isEmpty()) {
+				info->addAction(
+					QString::fromUtf8(Mokagram::Lang::Tr(label)) + u" · "_q + value,
+					[=] { QGuiApplication::clipboard()->setText(value); });
+			}
+		};
+		const auto format = QFileInfo(document->filename()).suffix().toUpper();
+		const auto duration = track.durationMs > 0 ? track.durationMs : document->duration();
+		addInfo("Формат", format.isEmpty() ? document->mimeString() : format);
+		if (duration > 0) {
+			addInfo("Длительность", Ui::FormatDurationText(duration / 1000));
+		}
+		if (document->size > 0) {
+			addInfo("Размер", Ui::FormatSizeText(document->size));
+			if (duration > 0) {
+				const auto bitrate = qRound64(document->size * 8. / duration);
+				addInfo("Средний битрейт",
+					QString::fromUtf8(Mokagram::Lang::Tr("%1 кбит/с")).arg(bitrate));
+			}
+		}
+		if (!info->empty()) {
+			menu->addAction(
+				QString::fromUtf8(Mokagram::Lang::Tr("Сведения о записи")),
+				std::move(info),
+				nullptr);
+		}
 	}
 	if (UsesQueue(instance->current(AudioMsgId::Type::Song))
 		&& PreviousAvailable()) {

@@ -7745,10 +7745,18 @@ protected:
 		const auto gap = s(12);
 		const auto pad = s(16);
 		const auto now = (_tab == Tab::Now);
+		const auto queueWidth = std::min(
+			std::max(width() - 2 * margin, 0),
+			std::clamp(width() / 4, s(280), s(360)));
+		const auto queueProgress = queuePanelDocked()
+			? _queueSlide.value(_queuePanelOpen ? 1. : 0.)
+			: 0.;
+		const auto mainWidth = width()
+			- int(base::SafeRound((queueWidth + gap) * queueProgress));
 		// Толстая капсула как у островка: по центру, не на всю ширину.
 		const auto barHeight = s(kBarHeight);
 		const auto barWidth = std::max(
-			std::min(width() - 2 * margin, s(kBarMaxWidth)),
+			std::min(mainWidth - 2 * margin, s(kBarMaxWidth)),
 			0);
 		const auto barProgress = _barSlide.value(_hasPlaybackTrack ? 1. : 0.);
 		result.barShown = _hasPlaybackTrack || barProgress > 0.;
@@ -7756,23 +7764,23 @@ protected:
 		result.contentBottom = height() - gap
 			- (_hasPlaybackTrack ? margin + barHeight : 0);
 		result.bar = QRect(
-			(width() - barWidth) / 2,
+			(mainWidth - barWidth) / 2,
 			height() - int(base::SafeRound((margin + barHeight) * barProgress)),
 			barWidth,
 			barHeight);
 
-		// Сверху ряд вкладок по центру экрана, справа кнопка «свернуть».
+		// Сверху ряд вкладок по центру основной области, справа кнопка «свернуть».
 		const auto homeDetail = (_tab == Tab::Home && _homeAlbumOpen);
 		const auto back = QRect(s(24) + _filter->width(), margin, s(96), s(40));
 		const auto reserve = margin + _collapse->width() + s(8);
 		const auto leftReserve = homeDetail ? back.x() + back.width() + s(8) : reserve;
-		const auto tabsBelow = homeDetail && (width() - leftReserve - reserve < s(240));
+		const auto tabsBelow = homeDetail && (mainWidth - leftReserve - reserve < s(240));
 		const auto navLeft = tabsBelow ? margin : leftReserve;
 		const auto navRight = tabsBelow ? margin : reserve;
-		const auto navWidth = std::clamp(width() - navLeft - navRight, 0, s(900));
+		const auto navWidth = std::clamp(mainWidth - navLeft - navRight, 0, s(900));
 		result.verticalNav = width() < s(720) || (homeDetail && navWidth < s(540));
 		result.nav = QRect(
-			std::max((width() - navWidth) / 2, navLeft),
+			std::max((mainWidth - navWidth) / 2, navLeft),
 			tabsBelow ? margin + s(40) + gap : margin,
 			navWidth,
 			s(result.verticalNav ? 80 : 40));
@@ -7785,18 +7793,7 @@ protected:
 		const auto top = result.nav.y() + result.nav.height() + gap;
 		const auto areaBottom = result.contentBottom;
 		const auto areaHeight = std::max(areaBottom - top, 0);
-		const auto queueWidth = std::min(
-			std::max(width() - 2 * margin, 0),
-			std::clamp(width() / 4, s(280), s(360)));
 		result.queuePanel = QRect(width() - margin - queueWidth, top, queueWidth, areaHeight);
-		const auto queueProgress = _queueSlide.value(_queuePanelOpen ? 1. : 0.);
-		const auto contentMargin = (_tab == Tab::Home && _homeArtistOpen)
-			? 0
-			: margin;
-		const auto queueInset = queuePanelDocked() && !result.queuePanel.isEmpty()
-			? int(base::SafeRound((queueWidth + gap + margin - contentMargin) * queueProgress))
-			: 0;
-		const auto mainWidth = width() - queueInset;
 
 		if (now) {
 			auto lyricsLeft = margin;
@@ -7840,7 +7837,14 @@ protected:
 				result.scrollTop = result.center.y();
 			}
 		} else {
-			const auto contentWidth = std::max(mainWidth - 2 * contentMargin, 0);
+			const auto contentMargin = (_tab == Tab::Home && _homeArtistOpen)
+				? 0
+				: margin;
+			const auto queueEdgeInset = int(base::SafeRound(
+				(margin - contentMargin) * queueProgress));
+			const auto contentWidth = std::max(
+				mainWidth - 2 * contentMargin - queueEdgeInset,
+				0);
 			result.center = QRect(contentMargin, top, contentWidth, areaHeight);
 			result.scrollTop = result.center.y()
 				+ (_tab == Tab::Search ? searchHeaderHeight(contentWidth) : 0);

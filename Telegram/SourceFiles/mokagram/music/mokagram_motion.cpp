@@ -90,6 +90,11 @@ std::map<QString, int> &PendingMotionFiles() {
 	return result;
 }
 
+bool &MotionCacheNeedsTrim() {
+	static auto result = false;
+	return result;
+}
+
 void TrimCache(const QString &protectPath) {
 	const auto dir = QDir(CacheDir());
 	const auto files = dir.entryInfoList({ u"*.mp4"_q }, QDir::Files, QDir::Time);
@@ -101,6 +106,7 @@ void TrimCache(const QString &protectPath) {
 	for (const auto &file : files) {
 		if (protectedFile(file)) retained += file.size();
 	}
+	MotionCacheNeedsTrim() = retained > 256 * 1024 * 1024;
 	for (const auto &file : files) {
 		if (protectedFile(file)) continue;
 		retained += file.size();
@@ -546,6 +552,9 @@ private:
 						auto &pending = PendingMotionFiles();
 						const auto i = pending.find(result);
 						if (--i->second == 0) pending.erase(i);
+						if (pending.empty() && MotionCacheNeedsTrim()) {
+							TrimCache(result);
+						}
 					});
 				}
 			});

@@ -622,6 +622,13 @@ std::map<QString, int> &PendingAudioFiles() {
 	return result;
 }
 
+bool &AudioCacheNeedsTrim() {
+	static auto result = false;
+	return result;
+}
+
+void TrimAudioCache(const QString &protectPath);
+
 void PostAudioFileResult(QString path, QString error, AudioFileDone done) {
 	if (!path.isEmpty()) ++PendingAudioFiles()[path];
 	crl::on_main([path = std::move(path), error = std::move(error),
@@ -632,6 +639,9 @@ void PostAudioFileResult(QString path, QString error, AudioFileDone done) {
 				auto &pending = PendingAudioFiles();
 				const auto i = pending.find(path);
 				if (--i->second == 0) pending.erase(i);
+				if (pending.empty() && AudioCacheNeedsTrim()) {
+					TrimAudioCache(path);
+				}
 			});
 		}
 	});
@@ -664,6 +674,7 @@ void TrimAudioCache(const QString &protectPath) {
 			++count;
 		}
 	}
+	AudioCacheNeedsTrim() = total > kAudioCacheBytes || count > kAudioCacheFiles;
 	for (const auto &file : files) {
 		if (protectedFile(file)) {
 			continue;

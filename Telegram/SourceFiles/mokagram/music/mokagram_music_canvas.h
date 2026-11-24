@@ -11,11 +11,12 @@ namespace Mokagram::Music {
 
 class CanvasPlayer final : public QObject {
 public:
-	CanvasPlayer(QObject *parent, Fn<void()> repaint);
+	CanvasPlayer(QObject *parent, Fn<void()> repaint, bool prepareOnly = false);
 	~CanvasPlayer();
 
 	void refresh(QString id, QString title, QString artist, bool playing);
 	void setVisible(bool visible);
+	[[nodiscard]] bool loading() const { return _loading; }
 	[[nodiscard]] QImage frame();
 	[[nodiscard]] bool paint(QPainter &p, QRect area);
 	void paintLoading(QPainter &p, QRect area, QColor color);
@@ -39,6 +40,7 @@ private:
 	QNetworkAccessManager _network;
 	std::unique_ptr<QObject> _requests;
 	Fn<void()> _repaint;
+	const bool _prepareOnly;
 	QString _id;
 	QString _title;
 	QString _artist;

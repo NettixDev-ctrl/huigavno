@@ -7089,7 +7089,8 @@ public:
 	, _repeat(Ui::CreateChild<RoundGlyph>(_playbackBar, Glyph::Repeat, 44))
 	, _canvas(this, [=] {
 		update(computeLayout().cover);
-	}) {
+	})
+	, _upcomingCanvas(this, [] {}, true) {
 		setFocusPolicy(Qt::TabFocus);
 		setMouseTracking(true);
 		_view->setBig(true);
@@ -7669,6 +7670,7 @@ public:
 		_motionCover = nullptr;
 		_spotifyCanvas = nullptr;
 		_canvas.refresh({}, {}, {}, false);
+		_upcomingCanvas.refresh({}, {}, {}, false);
 		auto effect = new QGraphicsOpacityEffect(this);
 		setGraphicsEffect(effect);
 		_fade.start([=] {
@@ -7692,6 +7694,7 @@ protected:
 		_searchHintMenu.hide();
 		_ambientTimer.stop();
 		_canvas.setVisible(false);
+		_upcomingCanvas.refresh({}, {}, {}, false);
 		_preparedBackdrop = QImage();
 		RpWidget::hideEvent(event);
 	}
@@ -10866,6 +10869,7 @@ private:
 			_motionCover = nullptr;
 			_spotifyCanvas = nullptr;
 			_canvas.refresh({}, {}, {}, false);
+			_upcomingCanvas.refresh({}, {}, {}, false);
 			return;
 		}
 		const auto instance = Media::Player::instance();
@@ -10917,10 +10921,26 @@ private:
 		const auto playing = state.state == Media::Player::State::Playing
 			|| state.state == Media::Player::State::Starting
 			|| state.state == Media::Player::State::Resuming;
+		const auto publicCanvas = Mokagram::Settings::Bool(u"player.public_canvas"_q);
 		_canvas.refresh(
-			Mokagram::Settings::Bool(u"player.public_canvas"_q) && !_spotifyCanvas
-				? track.id : QString(),
+			publicCanvas && !_spotifyCanvas ? track.id : QString(),
 			track.title, track.artist, playing && _tab == Tab::Now);
+		const auto &queue = QueueState();
+		const auto &settings = Core::App().settings();
+		const auto next = queue.index + 1;
+		if (publicCanvas && playing && _tab == Tab::Now && isVisible()
+			&& !_canvas.loading() && !anim::Disabled()
+			&& !PowerSaving::On(PowerSaving::kAnimations)
+			&& QGuiApplication::applicationState() == Qt::ApplicationActive
+			&& queue.index >= 0 && track.id == queue.currentId
+			&& next < int(queue.tracks.size())
+			&& settings.playerOrderMode() != Media::OrderMode::Shuffle
+			&& settings.playerRepeatMode() != Media::RepeatMode::One) {
+			const auto &upcoming = queue.tracks[next];
+			_upcomingCanvas.refresh(upcoming.id, upcoming.title, upcoming.artist, false);
+		} else {
+			_upcomingCanvas.refresh({}, {}, {}, false);
+		}
 		if (_isPlaying != playing) {
 			_isPlaying = playing;
 			repaintBackdrop();
@@ -11179,6 +11199,7 @@ private:
 
 	CoverBackground _backdrop;
 	CanvasPlayer _canvas;
+	CanvasPlayer _upcomingCanvas;
 	QImage _canvasBackground;
 	QImage _canvasBackgroundFrom;
 	QColor _canvasAccentFrom;

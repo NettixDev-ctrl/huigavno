@@ -56,9 +56,10 @@ bool IsVideoUrl(const QUrl &url) {
 
 } // namespace
 
-CanvasPlayer::CanvasPlayer(QObject *parent, Fn<void()> repaint)
+CanvasPlayer::CanvasPlayer(QObject *parent, Fn<void()> repaint, bool prepareOnly)
 : QObject(parent)
 , _repaint(std::move(repaint))
+, _prepareOnly(prepareOnly)
 , _loadingAnimation([=](crl::time) {
 	if (!_loading || !_visible
 		|| anim::Disabled()
@@ -129,15 +130,18 @@ void CanvasPlayer::refresh(
 	if (_id.isEmpty() || _title.isEmpty() || _artist.trimmed().isEmpty()) {
 		return;
 	}
+	if (const auto cached = Videos().object(_id)) {
+		if (!_prepareOnly) {
+			setLoading(true);
+			startVideo(*cached);
+		}
+		return;
+	}
 	setLoading(true);
 	QTimer::singleShot(90000, _requests.get(), [=] {
 		_requests.reset();
 		setLoading(false);
 	});
-	if (const auto cached = Videos().object(_id)) {
-		startVideo(*cached);
-		return;
-	}
 	findArtist(_artist);
 }
 
@@ -328,6 +332,10 @@ void CanvasPlayer::loadVideo(QUrl url) {
 void CanvasPlayer::startVideo(QByteArray data) {
 	const auto cost = int(data.size());
 	Videos().insert(_id, new QByteArray(data), cost);
+	if (_prepareOnly) {
+		setLoading(false);
+		return;
+	}
 	_playbackLifetime.destroy();
 	_player = std::make_unique<Media::Streaming::Player>(
 		std::make_shared<Media::Streaming::Reader>(

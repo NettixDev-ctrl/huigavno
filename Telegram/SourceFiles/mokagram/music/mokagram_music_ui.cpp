@@ -10945,7 +10945,11 @@ private:
 				update(dirty);
 			}
 		}
-		_view->setPosition(state.position * 1000 / frequency, playing);
+		_view->setPosition(
+			state.position * 1000 / frequency,
+			playing && !state.waitingForData,
+			state.id.changeablePlaybackSpeed()
+				? Core::App().settings().audioPlaybackSpeed() : 1.);
 		if (_queueFor != track.id) {
 			_queueFor = track.id;
 			refreshQueueViews();

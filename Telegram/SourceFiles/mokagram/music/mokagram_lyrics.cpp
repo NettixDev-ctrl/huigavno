@@ -22,6 +22,8 @@
 #include <QtGui/QTextDocumentFragment>
 
 #include <map>
+#include <memory>
+#include <optional>
 #include <vector>
 #include <QtCore/QTimer>
 
@@ -152,6 +154,108 @@ void ScaleTimes(Lyrics &lyrics, double ratio) {
 	result.remove(brackets);
 	result = result.trimmed();
 	return result.isEmpty() ? text : result;
+}
+
+[[nodiscard]] Lyrics ParseWordLyrics(
+		const QJsonObject &response,
+		const QString &title,
+		const QString &artist,
+		qint64 durationMs) {
+	const auto track = response.value("track").toObject();
+	const auto normalize = [](const QString &value) {
+		return value.normalized(QString::NormalizationForm_KC)
+			.simplified()
+			.toCaseFolded();
+	};
+	const auto sourceSeconds = track.value("duration").toInteger();
+	if (normalize(track.value("title").toString()) != normalize(title)
+		|| normalize(track.value("artist").toString()) != normalize(artist)
+		|| sourceSeconds <= 0
+		|| sourceSeconds > 86400
+		|| std::abs(durationMs - sourceSeconds * 1000) > 3000
+		|| response.value("meta").toObject().value("level").toString() != u"word"_q) {
+		return {};
+	}
+	auto result = Lyrics();
+	auto timed = false;
+	for (const auto &entry : response.value("lines").toArray()) {
+		const auto fields = entry.toObject();
+		const auto start = fields.value("start").toInteger(-1);
+		const auto text = fields.value("text").toString().trimmed();
+		if (start < 0 || start > durationMs || text.size() > 2048) {
+			continue;
+		}
+		auto line = LyricLine{ start, text };
+		auto lastEnd = start;
+		auto lastChar = 0;
+		for (const auto &entry : fields.value("words").toArray()) {
+			const auto word = entry.toObject();
+			const auto part = word.value("text").toString().trimmed();
+			if (part.isEmpty()) {
+				continue;
+			}
+			const auto from = int(text.indexOf(part, lastChar));
+			const auto wordStart = word.value("start").toInteger(-1);
+			const auto wordEnd = word.value("end").toInteger(-1);
+			if (from < 0
+				|| wordStart < lastEnd
+				|| wordEnd <= wordStart
+				|| wordEnd > durationMs + 3000) {
+				line.words.clear();
+				break;
+			}
+			lastChar = from + int(part.size());
+			lastEnd = wordEnd;
+			line.words.push_back({ wordStart, wordEnd, from, lastChar });
+		}
+		timed |= !line.words.empty();
+		result.lines.push_back(std::move(line));
+	}
+	if (!timed) {
+		return {};
+	}
+	std::stable_sort(result.lines.begin(), result.lines.end(), [](const auto &a, const auto &b) {
+		return a.timeMs < b.timeMs;
+	});
+	result.synced = result.found = true;
+	return result;
+}
+
+void RequestWordLyrics(
+		const QString &title,
+		const QString &artist,
+		qint64 durationMs,
+		Fn<void(Lyrics)> done) {
+	if (title.isEmpty() || artist.isEmpty() || durationMs <= 0) {
+		done({});
+		return;
+	}
+	auto query = QUrlQuery();
+	query.addQueryItem(u"title"_q, title);
+	query.addQueryItem(u"artist"_q, artist);
+	query.addQueryItem(u"duration"_q, QString::number(qRound64(durationMs / 1000.)));
+	query.addQueryItem(u"level"_q, u"word"_q);
+	query.addQueryItem(u"format"_q, u"json"_q);
+	auto url = QUrl(u"https://api.lrcmux.dev/get"_q);
+	url.setQuery(query);
+	auto request = QNetworkRequest(url);
+	request.setAttribute(
+		QNetworkRequest::RedirectPolicyAttribute,
+		QNetworkRequest::SameOriginRedirectPolicy);
+	const auto reply = Net().get(request);
+	LimitReply(reply, kMaxTextBytes);
+	QTimer::singleShot(2500, reply, [=] {
+		if (reply->isRunning()) {
+			reply->abort();
+		}
+	});
+	QObject::connect(reply, &QNetworkReply::finished, reply, [=] {
+		reply->deleteLater();
+		const auto json = (reply->error() == QNetworkReply::NoError)
+			? QJsonDocument::fromJson(reply->readAll()).object()
+			: QJsonObject();
+		done(ParseWordLyrics(json, title, artist, durationMs));
+	});
 }
 
 [[nodiscard]] Lyrics Pick(
@@ -918,7 +1022,12 @@ void FetchLyrics(
 	const auto clean = split.clean;
 	const auto trackName = split.trackName;
 	const auto artistName = split.artistName;
-	const auto finish = [=](Lyrics result) {
+	const auto deliver = [=](Lyrics result) {
+		auto &pending = Pending();
+		const auto i = pending.find(cacheKey);
+		if (i == pending.end()) {
+			return;
+		}
 		if (result.found) {
 			auto &cache = Cache();
 			if (cache.size() >= 64) {
@@ -926,17 +1035,32 @@ void FetchLyrics(
 			}
 			cache[cacheKey] = result;
 		}
-		auto &pending = Pending();
-		const auto i = pending.find(cacheKey);
-		if (i == pending.end()) {
-			return;
-		}
 		const auto waiting = std::move(i->second);
 		pending.erase(i);
 		for (const auto &callback : waiting) {
 			callback(result);
 		}
 	};
+	struct Lookup {
+		std::optional<Lyrics> fallback;
+		bool timedFinished = false;
+	};
+	const auto lookup = std::make_shared<Lookup>();
+	const auto finish = [=](Lyrics result) {
+		if (lookup->timedFinished) {
+			deliver(std::move(result));
+		} else {
+			lookup->fallback = std::move(result);
+		}
+	};
+	RequestWordLyrics(trackName, artistName, durationMs, [=](Lyrics result) {
+		lookup->timedFinished = true;
+		if (result.found) {
+			deliver(std::move(result));
+		} else if (lookup->fallback) {
+			deliver(std::move(*lookup->fallback));
+		}
+	});
 	auto first = QUrlQuery();
 	first.addQueryItem(u"track_name"_q, trackName);
 	first.addQueryItem(u"artist_name"_q, artistName);

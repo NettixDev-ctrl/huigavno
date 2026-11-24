@@ -56,7 +56,7 @@ public:
 	void updateCover();
 	void setCommentsTrack(const QString &id);
 	void followPlayback();
-	void setPosition(qint64 ms, bool playing);
+	void setPosition(qint64 ms, bool playing, double speed);
 
 	[[nodiscard]] rpl::producer<qint64> lineClicked() const;
 
@@ -70,6 +70,7 @@ protected:
 
 private:
 	[[nodiscard]] int lineAt(int y);
+	[[nodiscard]] QPointF lineOrigin(double top) const;
 	void updateTimer();
 	void reset();
 	void invalidateLayouts();
@@ -115,6 +116,7 @@ private:
 	double _fill = 0.;
 	qint64 _position = 0;
 	qint64 _positionAt = 0;
+	double _speed = 1.;
 	qint64 _last = 0;
 	double _scroll = 0.;
 	double _plainScroll = 0.;

@@ -16,9 +16,17 @@ class QImage;
 
 namespace Mokagram::Music {
 
+struct LyricWord {
+	qint64 startMs = 0;
+	qint64 endMs = 0;
+	int from = 0;
+	int to = 0;
+};
+
 struct LyricLine {
 	qint64 timeMs = 0;
 	QString text;
+	std::vector<LyricWord> words = {};
 };
 
 struct Lyrics {

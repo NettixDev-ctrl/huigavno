@@ -614,7 +614,7 @@ void LyricsView::followPlayback() {
 	_manualUntil = 0;
 }
 
-void LyricsView::setPosition(qint64 ms, bool playing) {
+void LyricsView::setPosition(qint64 ms, bool playing, double speed) {
 	const auto jumped = _big && std::abs(ms - livePosition()) > 1000;
 	if (jumped) {
 		followPlayback();
@@ -624,6 +624,7 @@ void LyricsView::setPosition(qint64 ms, bool playing) {
 	updateCover();
 	_position = ms;
 	_positionAt = _clock.elapsed();
+	_speed = speed;
 	_playing = playing;
 	updateTimer();
 	if (jumped || !_timer.isActive()) {
@@ -631,7 +632,6 @@ void LyricsView::setPosition(qint64 ms, bool playing) {
 	}
 }
 
-// Нажали на строку синхронного текста: время строки в мс (как в Spotify, перемотка к этой строке).
 [[nodiscard]] rpl::producer<qint64> LyricsView::lineClicked() const {
 	return _lineClicked.events();
 }
@@ -668,8 +668,31 @@ void LyricsView::mousePressEvent(QMouseEvent *e) {
 		return;
 	}
 	if (const auto index = lineAt(e->pos().y()); index >= 0) {
-		_lineClicked.fire_copy(_lyrics.lines[index].timeMs);
+		const auto &lyric = _lyrics.lines[index];
+		const auto &layout = layoutOf(index);
+		const auto point = e->position() - lineOrigin(anchorY() - _scroll + topOf(index));
+		for (auto i = 0; !lyric.words.empty() && i < layout.lineCount(); ++i) {
+			const auto line = layout.lineAt(i);
+			if (!line.naturalTextRect().contains(point)) {
+				continue;
+			}
+			const auto offset = line.xToCursor(point.x(), QTextLine::CursorOnCharacter);
+			for (const auto &word : lyric.words) {
+				if (offset >= word.from && offset < word.to) {
+					_lineClicked.fire_copy(word.startMs);
+					return;
+				}
+			}
+			break;
+		}
+		_lineClicked.fire_copy(lyric.timeMs);
 	}
+}
+
+QPointF LyricsView::lineOrigin(double top) const {
+	return _big
+		? QPointF(0., top + style::ConvertScale(13))
+		: QPointF(style::ConvertScale(24), top + style::ConvertScale(12));
 }
 
 // Номер строки под точкой по вертикали (-1 нет), считается так же, как рисуется.
@@ -730,7 +753,7 @@ int LyricsView::lineAtOffset(double y) {
 // Позиция трека между обновлениями плеера: плавнее подсветка строк.
 [[nodiscard]] qint64 LyricsView::livePosition() const {
 	return _position + (_playing
-		? std::min<qint64>(_clock.elapsed() - _positionAt, 600)
+		? qRound64(std::min<qint64>(_clock.elapsed() - _positionAt, 600) * _speed)
 		: 0);
 }
 
@@ -745,7 +768,8 @@ void LyricsView::tick() {
 	auto changed = false;
 	auto needLayout = false;
 	if (_lyrics.found && _lyrics.synced && !_lyrics.lines.empty()) {
-		const auto at = livePosition() + 120;
+		const auto position = livePosition();
+		const auto at = position + 120;
 		// LRC lines are timestamp-sorted; upper_bound keeps the last duplicate.
 		const auto next = std::upper_bound(
 			_lyrics.lines.begin(),
@@ -810,7 +834,9 @@ void LyricsView::tick() {
 			}
 		}
 		const auto fill = (_current >= 0)
-			? lineProgress(_current, at)
+			? lineProgress(_current, _lyrics.lines[_current].words.empty()
+				? at
+				: position)
 			: 0.;
 		changed |= (std::abs(fill - _fill) > 0.0005);
 		_fill = fill;
@@ -823,13 +849,26 @@ void LyricsView::tick() {
 	}
 }
 
-// Доля спетого в строке (0..1). Пословных меток у lrc нет, поэтому темп
-// угадываем: ~12 знаков/с, как поют обычно. Пауза в конце строки
-// заливку не растягивает: строка заливается раньше, чем начнётся следующая.
 [[nodiscard]] double LyricsView::lineProgress(int index, qint64 at) const {
 	const auto &lines = _lyrics.lines;
-	const auto start = lines[index].timeMs;
-	auto span = qint64(std::max(int(lines[index].text.size()), 1)) * 85;
+	const auto &line = lines[index];
+	if (!line.words.empty()) {
+		const auto next = std::upper_bound(
+			line.words.begin(),
+			line.words.end(),
+			at,
+			[](qint64 at, const LyricWord &word) { return at < word.startMs; });
+		if (next == line.words.begin()) {
+			return 0.;
+		}
+		const auto &word = *std::prev(next);
+		const auto progress = std::clamp(
+			(at - word.startMs) / double(word.endMs - word.startMs), 0., 1.);
+		return (word.from + (word.to - word.from) * progress) / line.text.size();
+	}
+	// У обычного LRC известен только старт строки.
+	const auto start = line.timeMs;
+	auto span = qint64(std::max(int(line.text.size()), 1)) * 85;
 	if (index + 1 < int(lines.size())) {
 		span = std::min(span, lines[index + 1].timeMs - start - 150);
 	}
@@ -993,13 +1032,10 @@ void LyricsView::paintEvent(QPaintEvent *e) {
 					* smooth((height() - cy) / (height() * 0.28));
 			}
 			// Без масштабирования: текст с трансформацией не берётся из кэша глифов и тормозит.
-			const auto origin = _big
-				? QPointF(0., top + style::ConvertScale(13))
-				: QPointF(style::ConvertScale(24), top + style::ConvertScale(12));
 			drawLayout(
 				p,
 				layoutOf(i),
-				origin,
+				lineOrigin(top),
 				(_lyrics.synced && i == _current) ? _fill : -1.,
 				(rest + (1. - rest) * w) * edge,
 				(rest + (0.45 - rest) * w) * edge);
@@ -1295,9 +1331,11 @@ private:
 		const auto state = instance->getState(AudioMsgId::Type::Song);
 		_view->setPosition(
 			state.position * 1000 / std::max<int64>(state.frequency, 1),
-			state.state == Media::Player::State::Playing
+			!state.waitingForData && (state.state == Media::Player::State::Playing
 				|| state.state == Media::Player::State::Starting
-				|| state.state == Media::Player::State::Resuming);
+				|| state.state == Media::Player::State::Resuming),
+			state.id.changeablePlaybackSpeed()
+				? Core::App().settings().audioPlaybackSpeed() : 1.);
 		if (_lyricsFor == track.id) {
 			return;
 		}

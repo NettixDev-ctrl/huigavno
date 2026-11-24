@@ -2347,7 +2347,7 @@ void AddAlbumToPlaylistMenu(
 				controller->showToast(error);
 				return;
 			}
-			std::erase_if(tracks, [](const Track &track) { return track.unavailable || track.id.isEmpty() || IsTelegramTrack(track); });
+			std::erase_if(tracks, [](const Track &track) { return !CanPlayTrack(track) || track.id.isEmpty() || IsTelegramTrack(track); });
 			if (tracks.empty()) {
 				controller->showToast(PlaylistText("В альбоме нет доступных треков"));
 				return;
@@ -2443,7 +2443,7 @@ public:
 		if (unavailable) {
 			setDisabled(true);
 			setToolTip(unavailableText);
-		} else if (!_track.unavailable && !IsTelegramTrack(_track)) {
+		} else if (!IsTelegramTrack(_track)) {
 			_likeButton = Ui::CreateChild<TrackLikeButton>(this, controller, _track);
 		}
 		if (_mode != RowMode::Home) {
@@ -2548,7 +2548,7 @@ public:
 	}
 
 	void setTextLinks(Fn<void(Track)> title, Fn<void(const Track&, const QString&)> artist) {
-		if (_track.unavailable) return;
+		if (!CanPlayTrack(_track)) return;
 		_titleLink = makeTextLink(_track.title, [=] { title(_track); });
 		_artistNames = TrackArtistNames(_track);
 		for (const auto &name : _artistNames) {
@@ -2754,7 +2754,7 @@ private:
 				PlayFromResults(index);
 			}
 		}, &st::menuIconSoundOn);
-		if (!track.unavailable) {
+		if (CanPlayTrack(track)) {
 			add(IsLiked(track.id)
 				? QString::fromUtf8(Mokagram::Lang::Tr("Убрать из избранного"))
 				: QString::fromUtf8(Mokagram::Lang::Tr("В избранное")), [=] {
@@ -2899,7 +2899,7 @@ private:
 			st::semiboldFont->elided(_track.title, titleRect.width()));
 		p.setFont(st::normalFont);
 		p.setPen(st::windowSubTextFg);
-		if (_moreArtists && !_track.unavailable) {
+		if (_moreArtists && CanPlayTrack(_track)) {
 			paintArtistLinks(p, subtitleRect);
 			return;
 		}
@@ -3728,7 +3728,7 @@ private:
 	});
 }
 
-// Популярное: треки SoundCloud, а если их не нашлось, дополняем из YouTube Music.
+// Каталог профиля с дополнением YouTube Music, если оно разрешено настройками.
 [[nodiscard]] std::vector<Track> HomeArtistPopular(
 		const std::vector<Track> &tracks,
 		const std::vector<Track> &youtube) {
@@ -8476,27 +8476,37 @@ protected:
 			&& !_homeArtistProfile.id.isEmpty()
 			&& name.simplified().compare(
 				_homeArtistProfile.name.simplified(), Qt::CaseInsensitive) == 0
-			&& (externalTrack || track.artistId == _homeArtistProfile.id)) {
+			&& track.artistId == _homeArtistProfile.id) {
 			return;
 		}
 		const auto tab = _tab;
 		const auto searchGeneration = _searchGen;
 		const auto homeGeneration = _homeAlbumGeneration;
-		ResolveTrackArtist(track, name, crl::guard(this, [=, seed = track](ArtistInfo artist) {
+		const auto done = crl::guard(this, [=, seed = track](ArtistInfo artist) {
 			if (generation != _artistLinkGeneration || tab != _tab
 				|| searchGeneration != _searchGen
 				|| homeGeneration != _homeAlbumGeneration) {
 				return;
 			}
 			if (artist.id.isEmpty()) {
-				if (!externalTrack) {
+				if (!externalTrack || seed.id.startsWith(u"yt:"_q)) {
 					_controller->showToast(PlaylistText("Профиль «%1» не найден").arg(name));
 					return;
 				}
 				artist = { {}, name, seed.artistArtworkUrl, {} };
 			}
 			showArtistProfile(std::move(artist), seed);
-		}));
+		});
+		if (track.id.startsWith(u"yt:"_q)) {
+			if (track.artistId.startsWith(u"yt:"_q)
+				&& TrackArtistNames(track).size() == 1) {
+				done({ track.artistId, name, track.artistArtworkUrl, {} });
+			} else {
+				ResolveYouTubeMusicArtist(name, done);
+			}
+		} else {
+			ResolveTrackArtist(track, name, done);
+		}
 	}
 
 	void chooseTrackArtist(const Track &track) {
@@ -9059,24 +9069,66 @@ protected:
 		}));
 	}
 
+	void mergeHomeArtistAlbum(Album album) {
+		const auto nativeYouTube = _homeArtistProfile.id.startsWith(u"yt:"_q);
+		const auto key = [](const QString &title) {
+			return title.normalized(QString::NormalizationForm_C).simplified().toCaseFolded();
+		};
+		const auto titleKey = key(album.title);
+		const auto i = std::ranges::find_if(_homeArtistAlbums, [&](const Album &other) {
+			return other.id == album.id || (other.releaseKind == album.releaseKind
+				&& key(other.title) == titleKey
+				&& (!other.releaseYear || !album.releaseYear
+					|| other.releaseYear == album.releaseYear));
+		});
+		if (i == _homeArtistAlbums.end()) {
+			_homeArtistAlbums.push_back(std::move(album));
+		} else if (i->id.startsWith(u"yt:"_q) != nativeYouTube
+			&& album.id.startsWith(u"yt:"_q) == nativeYouTube) {
+			*i = std::move(album);
+		}
+	}
+
 	void loadHomeArtistYouTube(int generation) {
 		if (!_homeArtistOpen || _homeArtistProfile.name.isEmpty()) {
 			return;
 		}
-		_homeArtistYouTubeDeferred = Settings::Bool(u"player.hide_youtube_fallback"_q);
-		if (_homeArtistYouTubeDeferred) {
+		const auto nativeYouTube = _homeArtistProfile.id.startsWith(u"yt:"_q);
+		_homeArtistYouTubeDeferred = !nativeYouTube
+			&& Settings::Bool(u"player.hide_youtube_fallback"_q);
+		if (_homeArtistYouTubeDeferred || _homeArtistYouTubeLoading) {
 			return;
 		}
-		// SoundCloud ничего не дал: популярное добираем из YouTube Music.
-		LoadArtistTracks(_homeArtistProfile.name, 12, crl::guard(this, [=](std::vector<Track> found) {
-			if (generation != _homeAlbumGeneration || !_homeArtistOpen) {
+		_homeArtistYouTubeLoading = true;
+		const auto load = crl::guard(this, [=](ArtistInfo artist) {
+			if (generation != _homeAlbumGeneration || !_homeArtistOpen) return;
+			if (artist.id.isEmpty()) {
+				_homeArtistYouTubeLoading = false;
 				return;
 			}
-			_homeArtistYouTubeTracks = std::move(found);
-			if (_tab == Tab::Home && !Settings::Bool(u"player.hide_youtube_fallback"_q)) {
-				rebuildTab();
-			}
-		}));
+			LoadYouTubeMusicArtistCatalog(artist.id, crl::guard(this, [=](
+					std::vector<Track> tracks, std::vector<Album> albums, QString error) {
+				if (generation != _homeAlbumGeneration || !_homeArtistOpen) return;
+				_homeArtistYouTubeLoading = false;
+				if (nativeYouTube) {
+					_homeArtistTracks = std::move(tracks);
+				} else {
+					_homeArtistYouTubeTracks = std::move(tracks);
+				}
+				for (auto &album : albums) {
+					mergeHomeArtistAlbum(std::move(album));
+				}
+				if (_tab == Tab::Home) {
+					if (!error.isEmpty()) _controller->showToast(error);
+					scheduleTabRebuild();
+				}
+			}));
+		});
+		if (nativeYouTube) {
+			load(_homeArtistProfile);
+		} else {
+			ResolveYouTubeMusicArtist(_homeArtistProfile.name, load);
+		}
 	}
 
 	void loadHomeArtist(
@@ -9089,6 +9141,13 @@ protected:
 		_homeArtistTracks.clear();
 		_homeArtistYouTubeTracks.clear();
 		_homeArtistYouTubeDeferred = false;
+		_homeArtistYouTubeLoading = false;
+		if (_homeArtistOpen) {
+			loadHomeArtistYouTube(generation);
+		}
+		if (artistId.startsWith(u"yt:"_q) || albumId.startsWith(u"yt:"_q)) {
+			return;
+		}
 		if (_homeArtistOpen && !_homeArtistSeed.id.isEmpty()) {
 			_homeArtistTracks.push_back(_homeArtistSeed);
 		}
@@ -9104,21 +9163,10 @@ protected:
 					const auto matchesId = !artistId.isEmpty() && artistId != u"0"_q
 						&& artistId == album.artistId;
 					const auto matchesName = album.artist.simplified().toCaseFolded() == artist;
-					if ((!matchesId && !matchesName) || album.id == albumId
-						|| (artistPage && album.releaseKind == ReleaseKind::Unknown)) {
+					if ((!matchesId && !matchesName) || album.id == albumId) {
 						continue;
 					}
-					const auto duplicate = std::ranges::any_of(_homeArtistAlbums, [&](const Album &other) {
-						return other.id == album.id || (artistPage
-							&& other.releaseKind == album.releaseKind
-							&& other.title.simplified().compare(album.title.simplified(),
-								Qt::CaseInsensitive) == 0
-							&& (other.releaseYear == album.releaseYear
-								|| !other.releaseYear || !album.releaseYear));
-					});
-					if (!duplicate) {
-						_homeArtistAlbums.push_back(std::move(album));
-					}
+					mergeHomeArtistAlbum(std::move(album));
 				}
 				if (_tab == Tab::Home && _homeAlbumOpen) {
 					rebuildTab();
@@ -9130,7 +9178,9 @@ protected:
 				if (generation != _homeAlbumGeneration) {
 					return;
 				}
-				_homeArtistAlbums = std::move(albums);
+				for (auto &album : albums) {
+					mergeHomeArtistAlbum(std::move(album));
+				}
 				if (_tab == Tab::Home && !_homeArtistAlbums.empty()) rebuildTab();
 				searchAlbums();
 			}));
@@ -9138,20 +9188,16 @@ protected:
 			searchAlbums();
 		}
 		if (!artistId.isEmpty()) {
-			UserTracks(artistId, 12, crl::guard(this, [=](std::vector<Track> tracks) {
+			UserTracks(artistId, artistPage ? 0 : 12, crl::guard(this, [=](std::vector<Track> tracks) {
 				if (generation != _homeAlbumGeneration) {
 					return;
 				}
-				std::erase_if(tracks, [&](const Track &other) {
-					return other.id == trackId || (_homeArtistOpen && !_homeArtistSeed.id.isEmpty()
-						&& !std::ranges::any_of(TrackArtistNames(other), [&](const QString &credit) {
-							return credit.compare(name, Qt::CaseInsensitive) == 0;
-						}));
-				});
-				const auto hasPlayable = std::ranges::any_of(tracks, CanPlayTrack);
-				if (_homeArtistOpen && !hasPlayable) {
-					loadHomeArtistYouTube(generation);
+				if (!_homeArtistOpen) {
+					std::erase_if(tracks, [&](const Track &other) {
+						return other.id == trackId;
+					});
 				}
+				const auto hasPlayable = std::ranges::any_of(tracks, CanPlayTrack);
 				if (_homeArtistOpen) {
 					if (!hasPlayable && !_homeArtistSeed.id.isEmpty()
 						&& std::ranges::none_of(tracks, [&](const Track &track) {
@@ -9168,8 +9214,6 @@ protected:
 					rebuildTab();
 				}
 			}), _homeArtistOpen);
-		} else {
-			loadHomeArtistYouTube(generation);
 		}
 	}
 
@@ -9263,27 +9307,30 @@ protected:
 		_homeAlbumNote.clear();
 		_homeAlbumLoading = false;
 		loadHomeAccent(art, generation);
-		if (!artist.id.isEmpty()) {
-			LoadArtistInfo(artist.id, crl::guard(this, [=](ArtistInfo info) {
-				if (generation != _homeAlbumGeneration || !_homeArtistOpen) {
-					return;
-				}
-				if (info.id.isEmpty()) {
-					return;
-				}
-				if (!info.avatarUrl.isEmpty() && _homeAlbum.artworkUrl != info.avatarUrl) {
-					_homeAlbum.artworkUrl = info.avatarUrl;
-					loadHomeAccent(info.avatarUrl, generation);
-				}
-				if (!info.avatarUrl.isEmpty()) {
-					_homeArtistProfile.avatarUrl = info.avatarUrl;
-				}
-				_homeArtistProfile.bannerUrl = info.bannerUrl;
-				_homeArtistBannerUrl = info.bannerUrl;
-				if (_tab == Tab::Home) {
-					rebuildTab();
-				}
-			}), true);
+		const auto updateArtist = crl::guard(this, [=](ArtistInfo info) {
+			if (generation != _homeAlbumGeneration || !_homeArtistOpen) {
+				return;
+			}
+			if (info.id.isEmpty()) {
+				return;
+			}
+			if (!info.avatarUrl.isEmpty() && _homeAlbum.artworkUrl != info.avatarUrl) {
+				_homeAlbum.artworkUrl = info.avatarUrl;
+				loadHomeAccent(info.avatarUrl, generation);
+			}
+			if (!info.avatarUrl.isEmpty()) {
+				_homeArtistProfile.avatarUrl = info.avatarUrl;
+			}
+			_homeArtistProfile.bannerUrl = info.bannerUrl;
+			_homeArtistBannerUrl = info.bannerUrl;
+			if (_tab == Tab::Home) {
+				rebuildTab();
+			}
+		});
+		if (artist.id.startsWith(u"yt:"_q)) {
+			LoadYouTubeMusicArtistInfo(artist.id, updateArtist);
+		} else if (!artist.id.isEmpty()) {
+			LoadArtistInfo(artist.id, updateArtist, true);
 		}
 		loadHomeArtist(artist.name, artist.id, {}, {}, generation);
 		if (track.id.isEmpty()) {
@@ -9336,7 +9383,7 @@ protected:
 		_homeAlbumNote = QString::fromUtf8(Mokagram::Lang::Tr("Загружаю альбом…"));
 		const auto generation = ++_homeAlbumGeneration;
 		loadHomeAccent(_homeAlbum.artworkUrl, generation);
-		loadHomeArtist(_homeAlbum.artist, {}, {}, _homeAlbum.id, generation);
+		loadHomeArtist(_homeAlbum.artist, _homeAlbum.artistId, {}, _homeAlbum.id, generation);
 		rebuildTab();
 		AlbumTracks(_homeAlbum.id, crl::guard(this, [=](std::vector<Track> tracks, QString error) {
 			if (generation != _homeAlbumGeneration) {
@@ -9349,7 +9396,10 @@ protected:
 			_homeAlbumTracks = std::move(tracks);
 			if (!_homeAlbumTracks.empty() && !_homeAlbumTracks.front().artistId.isEmpty()) {
 				const auto artistId = _homeAlbumTracks.front().artistId;
-				UserTracks(artistId, 12, crl::guard(this, [=](std::vector<Track> related) {
+				if (_homeAlbum.artistId.isEmpty()) {
+					_homeAlbum.artistId = artistId;
+				}
+				const auto updateRelated = crl::guard(this, [=](std::vector<Track> related) {
 					if (generation != _homeAlbumGeneration) {
 						return;
 					}
@@ -9359,7 +9409,21 @@ protected:
 					});
 					_homeArtistTracks = std::move(related);
 					if (_tab == Tab::Home && _homeAlbumOpen) rebuildTab();
-				}));
+				});
+				if (artistId.startsWith(u"yt:"_q)) {
+					LoadYouTubeMusicArtistCatalog(artistId, crl::guard(this, [=](
+							std::vector<Track> related, std::vector<Album> albums, QString) {
+						if (generation != _homeAlbumGeneration) return;
+						for (auto &album : albums) {
+							if (album.id != _homeAlbum.id) {
+								mergeHomeArtistAlbum(std::move(album));
+							}
+						}
+						updateRelated(std::move(related));
+					}));
+				} else {
+					UserTracks(artistId, 12, updateRelated);
+				}
 			}
 			_homeAlbumNote = !error.isEmpty() ? error : _homeAlbumTracks.empty()
 				? QString::fromUtf8(Mokagram::Lang::Tr("В альбоме нет доступных треков"))
@@ -9424,6 +9488,11 @@ protected:
 		const auto s = [](int value) { return style::ConvertScale(value); };
 		auto releases = _homeArtistAlbums;
 		std::erase_if(releases, [&](const Album &release) {
+			if (release.id.startsWith(u"yt:"_q)
+				&& !_homeArtistProfile.id.startsWith(u"yt:"_q)
+				&& Settings::Bool(u"player.hide_youtube_fallback"_q)) {
+				return true;
+			}
 			switch (_discographyFilter) {
 			case DiscographyFilter::All: return false;
 			case DiscographyFilter::Albums:
@@ -9593,6 +9662,15 @@ protected:
 					}), _homeArtistOpen, _homeArtistBannerUrl,
 					crl::guard(this, [=] { playHomeArtist(); }),
 					crl::guard(this, [=] {
+						if (!_homeAlbum.artistId.isEmpty()) {
+							auto seed = Track();
+							seed.id = _homeAlbum.id;
+							seed.artist = _homeAlbum.artist;
+							seed.uploaderName = _homeAlbum.artist;
+							seed.artistId = _homeAlbum.artistId;
+							chooseTrackArtist(seed);
+							return;
+						}
 						const auto artistTrack = std::find_if(
 							_homeAlbumTracks.begin(),
 							_homeAlbumTracks.end(),
@@ -11000,6 +11078,7 @@ private:
 	std::vector<Track> _homeArtistTracks;
 	std::vector<Track> _homeArtistYouTubeTracks;
 	bool _homeArtistYouTubeDeferred = false;
+	bool _homeArtistYouTubeLoading = false;
 	std::vector<Album> _homeArtistAlbums;
 	QString _homeArtistBannerUrl;
 	DiscographyFilter _discographyFilter = DiscographyFilter::All;

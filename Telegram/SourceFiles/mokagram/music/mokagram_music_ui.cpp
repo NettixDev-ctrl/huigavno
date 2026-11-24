@@ -8871,7 +8871,8 @@ protected:
 		_nav[1]->setActiveColor(Qt::white);
 		update();
 		LoadImage(ArtUrl(url, u"t500x500"_q), crl::guard(this, [=](QImage image) {
-			if (generation != _homeAlbumGeneration) {
+			if (generation != _homeAlbumGeneration
+				|| (_homeArtistOpen && _homeAlbum.artworkUrl != url)) {
 				return;
 			}
 			_homeAccent = ComputeAccent(image);
@@ -8915,8 +8916,9 @@ protected:
 		if (_homeArtistOpen && !_homeArtistSeed.id.isEmpty()) {
 			_homeArtistTracks.push_back(_homeArtistSeed);
 		}
-		if (!name.isEmpty()) {
-			SearchAlbums(name, 20, crl::guard(this, [=](std::vector<Album> albums, QString error) {
+		const auto searchAlbums = [=] {
+			if (name.isEmpty()) return;
+			SearchAlbums(name, 20, crl::guard(this, [=](std::vector<Album> albums, QString) {
 				if (generation != _homeAlbumGeneration) {
 					return;
 				}
@@ -8935,6 +8937,21 @@ protected:
 					rebuildTab();
 				}
 			}));
+		};
+		if (_homeArtistOpen && !artistId.isEmpty()) {
+			LoadArtistAlbums(artistId, crl::guard(this, [=](std::vector<Album> albums) {
+				if (generation != _homeAlbumGeneration) {
+					return;
+				}
+				if (albums.empty()) {
+					searchAlbums();
+					return;
+				}
+				_homeArtistAlbums = std::move(albums);
+				if (_tab == Tab::Home) rebuildTab();
+			}));
+		} else {
+			searchAlbums();
 		}
 		if (!artistId.isEmpty()) {
 			UserTracks(artistId, 12, crl::guard(this, [=](std::vector<Track> tracks) {
@@ -8947,11 +8964,15 @@ protected:
 							return credit.compare(name, Qt::CaseInsensitive) == 0;
 						}));
 				});
-				if (_homeArtistOpen && tracks.empty()) {
+				const auto hasPlayable = std::ranges::any_of(tracks, CanPlayTrack);
+				if (_homeArtistOpen && !hasPlayable) {
 					loadHomeArtistYouTube(generation);
 				}
 				if (_homeArtistOpen) {
-					if (tracks.empty() && !_homeArtistSeed.id.isEmpty()) {
+					if (!hasPlayable && !_homeArtistSeed.id.isEmpty()
+						&& std::ranges::none_of(tracks, [&](const Track &track) {
+							return track.id == _homeArtistSeed.id;
+						})) {
 						tracks.push_back(_homeArtistSeed);
 					}
 					std::stable_sort(tracks.begin(), tracks.end(), [](const Track &a, const Track &b) {
@@ -8962,7 +8983,7 @@ protected:
 				if (_tab == Tab::Home && _homeAlbumOpen) {
 					rebuildTab();
 				}
-			}));
+			}), _homeArtistOpen);
 		} else {
 			loadHomeArtistYouTube(generation);
 		}
@@ -9063,14 +9084,22 @@ protected:
 				if (generation != _homeAlbumGeneration || !_homeArtistOpen) {
 					return;
 				}
-				if (!info.avatarUrl.isEmpty()) {
-					_homeAlbum.artworkUrl = info.avatarUrl;
+				if (info.id.isEmpty()) {
+					return;
 				}
+				if (!info.avatarUrl.isEmpty() && _homeAlbum.artworkUrl != info.avatarUrl) {
+					_homeAlbum.artworkUrl = info.avatarUrl;
+					loadHomeAccent(info.avatarUrl, generation);
+				}
+				if (!info.avatarUrl.isEmpty()) {
+					_homeArtistProfile.avatarUrl = info.avatarUrl;
+				}
+				_homeArtistProfile.bannerUrl = info.bannerUrl;
 				_homeArtistBannerUrl = info.bannerUrl;
 				if (_tab == Tab::Home) {
 					rebuildTab();
 				}
-			}));
+			}), true);
 		}
 		loadHomeArtist(artist.name, artist.id, {}, {}, generation);
 		if (track.id.isEmpty()) {

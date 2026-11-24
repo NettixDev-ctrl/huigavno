@@ -82,7 +82,8 @@ void LoadRelatedPage(
 void UserTracks(
 	const QString &userId,
 	int limit,
-	Fn<void(std::vector<Track>)> done);
+	Fn<void(std::vector<Track>)> done,
+	bool includeUnavailable = false);
 
 struct ArtistInfo {
 	QString id;
@@ -94,7 +95,8 @@ struct ArtistInfo {
 // Публичный профиль исполнителя SoundCloud, включая аватар и обложку страницы.
 void LoadArtistInfo(
 	const QString &userId,
-	Fn<void(ArtistInfo)> done);
+	Fn<void(ArtistInfo)> done,
+	bool refresh = false);
 
 void ResolveTrackArtist(
 	const Track &track,
@@ -121,6 +123,10 @@ struct Album {
 	// nullopt: some of the track artwork is unknown.
 	std::optional<QString> backdropArtworkUrl;
 };
+
+void LoadArtistAlbums(
+	const QString &userId,
+	Fn<void(std::vector<Album>)> done);
 
 enum class SearchCategory { All, Tracks, Playlists, Albums, Artists };
 

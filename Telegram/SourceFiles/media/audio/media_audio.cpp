@@ -644,7 +644,7 @@ void Mixer::Track::updateStatePosition() {
 }
 
 void Mixer::Track::updateVisualizerLevel() {
-	state.visualizerLevel = 0.;
+	state.visualizerLevels = {};
 	const auto samples = withSpeed.samples[0];
 	const auto &buffer = withSpeed.buffered[0];
 	if (!samples || buffer.isEmpty()) {
@@ -660,23 +660,48 @@ void Mixer::Track::updateVisualizerLevel() {
 		int64(samples - 1));
 	const auto window = std::min<int64>(1024, samples - offset);
 	const auto begin = buffer.constData() + offset * bytesPerFrame;
-	uint64 total = 0;
-	if (format == AL_FORMAT_MONO16 || format == AL_FORMAT_STEREO16) {
-		const auto count = window * bytesPerFrame / int(sizeof(int16));
-		const auto values = reinterpret_cast<const int16*>(begin);
-		for (auto i = 0; i != count; ++i) {
-			total += std::abs(int(values[i]));
+	const auto channels = (format == AL_FORMAT_MONO8 || format == AL_FORMAT_MONO16)
+		? 1
+		: 2;
+	const auto sampleAt = [&](int64 frame) {
+		const auto data = begin + frame * bytesPerFrame;
+		if (format == AL_FORMAT_MONO16 || format == AL_FORMAT_STEREO16) {
+			const auto values = reinterpret_cast<const int16*>(data);
+			auto total = 0.;
+			for (auto channel = 0; channel != channels; ++channel) {
+				total += values[channel] / 32768.;
+			}
+			return total / channels;
+		} else if (format == AL_FORMAT_MONO8 || format == AL_FORMAT_STEREO8) {
+			const auto values = reinterpret_cast<const uchar*>(data);
+			auto total = 0.;
+			for (auto channel = 0; channel != channels; ++channel) {
+				total += (values[channel] - 128) / 128.;
+			}
+			return total / channels;
 		}
-		const auto average = total / double(count * 32767);
-		state.visualizerLevel = float(std::clamp(average * 4., 0., 1.));
-	} else if (format == AL_FORMAT_MONO8 || format == AL_FORMAT_STEREO8) {
-		const auto count = window * bytesPerFrame;
-		const auto values = reinterpret_cast<const uchar*>(begin);
-		for (auto i = 0; i != count; ++i) {
-			total += std::abs(int(values[i]) - 128);
+		return 0.;
+	};
+	// Mokagram: five Goertzel bands are small enough for the playback update
+	// loop and retain the audible separation between bass and treble.
+	static constexpr auto kFrequencies = std::array{ 70., 180., 550., 1800., 5500. };
+	for (auto band = 0; band != int(kFrequencies.size()); ++band) {
+		const auto coefficient = 2. * std::cos(
+			2. * M_PI * kFrequencies[band] / state.frequency);
+		auto previous = 0.;
+		auto current = 0.;
+		for (auto frame = int64(0); frame != window; ++frame) {
+			const auto next = sampleAt(frame) + coefficient * current - previous;
+			previous = current;
+			current = next;
 		}
-		const auto average = total / double(count * 127);
-		state.visualizerLevel = float(std::clamp(average * 4., 0., 1.));
+		const auto power = std::max(
+			current * current + previous * previous - coefficient * current * previous,
+			0.);
+		state.visualizerLevels[band] = float(std::clamp(
+			std::sqrt(power) * 8. / window,
+			0.,
+			1.));
 	}
 }
 

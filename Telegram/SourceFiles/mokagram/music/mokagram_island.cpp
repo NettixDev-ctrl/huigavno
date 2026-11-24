@@ -368,10 +368,9 @@ private:
 	Spring _expanded;
 	Spring _alpha;
 	Spring _level;
-	Spring _audioLevel;
+	std::array<Spring, kBars> _audioLevels;
 	Spring _coverScale;
 	crl::time _lastFrame = 0;
-	double _phase = 0.;
 	bool _shown = false;
 	bool _wantExpanded = false;
 	Part _dragging = Part::None;
@@ -678,7 +677,6 @@ void Island::refreshState(const Media::Player::TrackState &state) {
 		_playingKnown = true;
 		_playing = playing;
 		_level.to(playing ? 1. : 0., kResize);
-		_audioLevel.to(playing ? state.visualizerLevel : 0., kResize);
 		_coverScale.to(playing ? 1. : kPausedCoverScale, kExpand);
 		if (animated) {
 			_swap.start([=] { update(); }, 0., 1., kSwapDuration, anim::easeOutCubic);
@@ -687,9 +685,12 @@ void Island::refreshState(const Media::Player::TrackState &state) {
 		}
 		startFrames();
 	}
-	if (_playing) {
-		_audioLevel.to(state.visualizerLevel, Motion{ 0.22, 0.9 });
+	for (auto i = 0; i != kBars; ++i) {
+		_audioLevels[i].to(
+			_playing ? state.visualizerLevels[i] : 0.,
+			Motion{ 0.22, 0.9 });
 	}
+	startFrames();
 	update();
 }
 
@@ -721,21 +722,23 @@ bool Island::frame() {
 		_expanded.step(dt, 0.001);
 		_alpha.step(dt, 0.001);
 		_level.step(dt, 0.001);
-		_audioLevel.step(dt, 0.001);
+		for (auto &level : _audioLevels) {
+			level.step(dt, 0.001);
+		}
 		_coverScale.step(dt, 0.001);
 	}
-	const auto moving = !_width.settled()
+	auto moving = !_width.settled()
 		|| !_height.settled()
 		|| !_radius.settled()
 		|| !_expanded.settled()
 		|| !_alpha.settled()
 		|| !_level.settled()
-		|| !_audioLevel.settled()
 		|| !_coverScale.settled();
-	const auto bars = _playing
-		&& !PowerSaving::On(PowerSaving::kAnimations);
-	if (bars) {
-		_phase += elapsed;
+	for (const auto &level : _audioLevels) {
+		if (!level.settled()) {
+			moving = true;
+			break;
+		}
 	}
 	_moving = moving;
 	if (!_shown && _alpha.value() <= 0.) {
@@ -744,17 +747,9 @@ bool Island::frame() {
 		Shortcuts::ToggleMediaShortcuts(false);
 		return false;
 	}
-#ifdef Q_OS_MAC
-	// Mokagram: settled geometry needs only the decorative bars at 30 fps.
-	if (!moving && bars && isVisible()) {
-		update(barsRect().toAlignedRect());
-		_barsTimer.callOnce(33, Qt::CoarseTimer);
-		return false;
-	}
-#endif
 	applyGeometry();
 	update();
-	return moving || bars;
+	return _moving;
 }
 
 void Island::relayout() {
@@ -1146,17 +1141,13 @@ void Island::paintBars(QPainter &p) {
 	const auto rect = barsRect();
 	const auto accent = CurrentCoverAccent();
 	const auto color = accent.isValid() ? accent : QColor(Qt::white);
-	const auto level = std::clamp(_audioLevel.value(), 0., 1.);
 	const auto bar = S(kBarWidth);
 	const auto gap = S(kBarGap);
-	static constexpr auto kSpeed = std::array{ 9.1, 6.7, 11.3, 7.9, 10.2 };
-	static constexpr auto kShift = std::array{ 0.0, 1.7, 0.6, 2.4, 1.1 };
 	p.setPen(Qt::NoPen);
 	p.setBrush(color);
 	for (auto i = 0; i != kBars; ++i) {
-		const auto wave = 0.5 + 0.5 * std::sin(_phase * kSpeed[i] + kShift[i]);
-		// Mokagram: the overall height follows the decoded PCM amplitude.
-		const auto value = Lerp(0.18, 0.34 + 0.66 * wave, level);
+		const auto level = std::clamp(_audioLevels[i].value(), 0., 1.);
+		const auto value = Lerp(0.16, 1., level);
 		const auto height = std::max(rect.height() * value, double(bar));
 		const auto x = rect.x() + i * (bar + gap);
 		const auto y = rect.y() + (rect.height() - height) / 2.;

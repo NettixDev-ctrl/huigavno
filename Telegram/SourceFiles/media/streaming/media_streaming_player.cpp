@@ -952,7 +952,7 @@ Media::Player::TrackState Player::prepareLegacyState() const {
 	if (const auto mixer = Media::Player::mixer()) {
 		const auto audio = mixer->currentState(_audioId.type());
 		if (audio.id == _audioId) {
-			result.visualizerLevel = audio.visualizerLevel;
+			result.visualizerLevels = audio.visualizerLevels;
 		}
 	}
 	result.state = (_lastFailure == Error::OpenFailed

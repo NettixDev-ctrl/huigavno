@@ -15,6 +15,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include <QtCore/QTimer>
 
+#include <array>
+
 namespace Ui {
 struct PreparedFileInformation;
 } // namespace Ui
@@ -134,8 +136,8 @@ struct TrackState {
 	int frequency = kDefaultFrequency;
 	int fileHeaderSize = 0;
 	bool waitingForData = false;
-	// Mokagram: normalized amplitude from the PCM currently sent to OpenAL.
-	float visualizerLevel = 0.;
+	// Mokagram: normalized PCM energy for bass through high frequencies.
+	std::array<float, 5> visualizerLevels = {};
 };
 
 class Mixer final : public QObject {

@@ -43,6 +43,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "styles/style_menu_icons.h"
 
 #include <QtCore/QPointer>
+#include <QtGui/QPaintEvent>
 #include <QtGui/QPainterPath>
 #ifdef Q_OS_MAC
 #include <QtGui/QGuiApplication>
@@ -227,10 +228,10 @@ void PaintGlyph(
 		QPointF c,
 		int size,
 		QColor color = QColor(Qt::white)) {
-	using Key = std::tuple<int, int, QRgb>;
+	using Key = std::tuple<int, int, QRgb, qreal>;
 	static auto cache = base::flat_map<Key, QImage>();
-	const auto ratio = style::DevicePixelRatio();
-	const auto key = Key(int(glyph), size, color.rgba());
+	const auto ratio = p.device()->devicePixelRatioF();
+	const auto key = Key(int(glyph), size, color.rgba(), ratio);
 	auto i = cache.find(key);
 	if (i == end(cache)) {
 		auto image = QImage(
@@ -317,6 +318,10 @@ private:
 	void refreshState(const Media::Player::TrackState &state);
 	void startFrames();
 	bool frame();
+	[[nodiscard]] bool geometrySettled() const;
+	[[nodiscard]] bool springsSettled() const;
+	[[nodiscard]] QRect barsUpdateRect() const;
+	void updatePlayback();
 	void applyGeometry();
 	void setVolume(double volume, bool finished);
 	void dragTo(QPoint point);
@@ -367,6 +372,11 @@ private:
 #endif
 	base::unique_qptr<Ui::PopupMenu> _menu;
 	std::shared_ptr<Data::DocumentMedia> _media;
+	QImage _coverRaster;
+	qint64 _coverRasterKey = 0;
+	QRectF _coverRasterRect;
+	double _coverRasterRadius = 0.;
+	qreal _coverRasterDpr = 0.;
 	Spring _width;
 	Spring _height;
 	Spring _radius;
@@ -678,7 +688,8 @@ void Island::refreshState(const Media::Player::TrackState &state) {
 		_length = state.id.audio()->duration();
 	}
 	const auto playing = Media::Player::ShowPauseIcon(state.state);
-	if (!_playingKnown || _playing != playing) {
+	const auto playingChanged = !_playingKnown || _playing != playing;
+	if (playingChanged) {
 		const auto animated = _playingKnown && isVisible();
 		_playingKnown = true;
 		_playing = playing;
@@ -697,10 +708,61 @@ void Island::refreshState(const Media::Player::TrackState &state) {
 			Motion{ 0.22, 0.9 });
 	}
 	startFrames();
-	update();
+	if (playingChanged) {
+		update();
+	} else {
+		updatePlayback();
+	}
+}
+
+bool Island::geometrySettled() const {
+	return _width.settled()
+		&& _height.settled()
+		&& _radius.settled()
+		&& _expanded.settled()
+		&& _alpha.settled();
+}
+
+bool Island::springsSettled() const {
+	if (!geometrySettled() || !_level.settled() || !_coverScale.settled()) {
+		return false;
+	}
+	for (const auto &level : _audioLevels) {
+		if (!level.settled()) {
+			return false;
+		}
+	}
+	return true;
+}
+
+QRect Island::barsUpdateRect() const {
+	return barsRect().toAlignedRect().adjusted(-2, -2, 2, 2);
+}
+
+void Island::updatePlayback() {
+	if (!geometrySettled() || !_coverScale.settled()) {
+		update();
+		return;
+	}
+	auto dirty = QRegion(barsUpdateRect());
+	if (expanded() > 0.) {
+		const auto f = fullFrame();
+		const auto progress = progressRect();
+		const auto font = style::font(S(isWindow() ? 10 : 12), 0, 0);
+		const auto timeTop = int(progress.center().y()) - font->height / 2;
+		const auto top = std::min(progress.top(), double(timeTop));
+		const auto bottom = std::max(
+			progress.bottom(), double(timeTop + font->height));
+		dirty += QRectF(f.x(), top, f.width(), bottom - top)
+			.toAlignedRect().adjusted(-2, -2, 2, 2);
+	}
+	update(dirty);
 }
 
 void Island::startFrames() {
+	if (springsSettled()) {
+		return;
+	}
 #ifdef Q_OS_MAC
 	_barsTimer.cancel();
 #endif
@@ -715,6 +777,7 @@ void Island::startFrames() {
 }
 
 bool Island::frame() {
+	const auto repaintAll = !geometrySettled() || !_coverScale.settled();
 	const auto now = crl::now();
 	const auto elapsed = std::min((now - _lastFrame) / 1000., 0.05);
 	auto left = elapsed;
@@ -733,28 +796,19 @@ bool Island::frame() {
 		}
 		_coverScale.step(dt, 0.001);
 	}
-	auto moving = !_width.settled()
-		|| !_height.settled()
-		|| !_radius.settled()
-		|| !_expanded.settled()
-		|| !_alpha.settled()
-		|| !_level.settled()
-		|| !_coverScale.settled();
-	for (const auto &level : _audioLevels) {
-		if (!level.settled()) {
-			moving = true;
-			break;
-		}
-	}
-	_moving = moving;
+	_moving = !springsSettled();
 	if (!_shown && _alpha.value() <= 0.) {
 		hide();
 		_media = nullptr;
 		Shortcuts::ToggleMediaShortcuts(false);
 		return false;
 	}
-	applyGeometry();
-	update();
+	if (repaintAll || (!isWindow() && !_moving)) {
+		applyGeometry();
+		update();
+	} else {
+		update(barsUpdateRect());
+	}
 	return _moving;
 }
 
@@ -1094,7 +1148,10 @@ void Island::paintEvent(QPaintEvent *e) {
 		p.strokePath(path, QPen(QColor(255, 255, 255, 51), S(1)));
 	}
 	p.setClipPath(path);
-	paintCover(p);
+	if (!_coverScale.settled()
+		|| e->region().intersects(coverRect().toAlignedRect().adjusted(-2, -2, 2, 2))) {
+		paintCover(p);
+	}
 	// Mokagram: fade header details as the island shrinks to its cover.
 	const auto details = std::clamp(
 		(shape.width() - S(kCompactHeight))
@@ -1103,6 +1160,11 @@ void Island::paintEvent(QPaintEvent *e) {
 		1.);
 	p.setOpacity(alpha * details);
 	paintBars(p);
+	if (geometrySettled()
+		&& _coverScale.settled()
+		&& barsUpdateRect().contains(e->region().boundingRect())) {
+		return;
+	}
 	paintHeart(p);
 	const auto progress = expanded();
 	const auto compact = 1. - std::clamp(progress / 0.2, 0., 1.);
@@ -1134,14 +1196,48 @@ void Island::paintCover(QPainter &p) {
 		p.fillPath(path, QColor(0x28, 0x28, 0x28));
 		return;
 	}
-	p.save();
-	p.setClipPath(path, Qt::IntersectClip);
+	// Keep animated artwork on the original sampling path. Settled artwork is
+	// rasterized once at the destination DPR, including its fractional placement
+	// and rounded mask, so subsequent paints only copy destination-sized pixels.
 	const auto side = std::min(cover.width(), cover.height());
 	const auto source = QRect(
 		(cover.width() - side) / 2,
 		(cover.height() - side) / 2,
 		side,
 		side);
+	if (geometrySettled() && _coverScale.settled()) {
+		const auto ratio = devicePixelRatioF();
+		const auto physical = QRectF(
+			rect.x() * ratio,
+			rect.y() * ratio,
+			rect.width() * ratio,
+			rect.height() * ratio).toAlignedRect().adjusted(-1, -1, 1, 1);
+		const auto origin = QPointF(physical.x() / ratio, physical.y() / ratio);
+		const auto local = rect.translated(-origin);
+		if (_coverRasterKey != cover.cacheKey()
+			|| _coverRasterRect != local
+			|| _coverRasterRadius != radius
+			|| _coverRasterDpr != ratio
+			|| _coverRaster.size() != physical.size()) {
+			_coverRaster = QImage(
+				physical.size(), QImage::Format_ARGB32_Premultiplied);
+			_coverRaster.setDevicePixelRatio(ratio);
+			_coverRaster.fill(Qt::transparent);
+			auto q = QPainter(&_coverRaster);
+			q.setRenderHints(p.renderHints());
+			q.setClipPath(path.translated(-origin));
+			q.drawImage(local, cover, source);
+			q.end();
+			_coverRasterKey = cover.cacheKey();
+			_coverRasterRect = local;
+			_coverRasterRadius = radius;
+			_coverRasterDpr = ratio;
+		}
+		p.drawImage(origin, _coverRaster);
+		return;
+	}
+	p.save();
+	p.setClipPath(path, Qt::IntersectClip);
 	p.drawImage(rect, cover, source);
 	p.restore();
 }

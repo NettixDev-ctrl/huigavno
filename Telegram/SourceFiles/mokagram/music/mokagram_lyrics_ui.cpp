@@ -22,10 +22,14 @@
 #include "ui/power_saving.h"
 #include "ui/resize_area.h"
 #include "ui/widgets/buttons.h"
+#include "ui/widgets/popup_menu.h"
 #include "window/window_columns.h"
 #include "window/window_session_controller.h"
 
 #include <QtCore/QPointer>
+#include <QtCore/QJsonDocument>
+#include <QtCore/QJsonObject>
+#include <QtGui/QContextMenuEvent>
 #include <QtGui/QGuiApplication>
 #include <QtGui/QLinearGradient>
 #include <QtGui/QTextLayout>
@@ -553,6 +557,9 @@ LyricsView::LyricsView(QWidget *parent)
 		tick();
 		update();
 	}, lifetime());
+	Settings::StringValue(u"lyrics.offsets"_q) | rpl::on_next([=](const QString &json) {
+		loadTimingOffset(json);
+	}, lifetime());
 }
 
 LyricsView::~LyricsView() = default;
@@ -578,8 +585,10 @@ void LyricsView::setCoverTint(bool on) {
 	update();
 }
 
-void LyricsView::setLoading() {
+void LyricsView::setLoading(const QString &trackId) {
 	reset();
+	_timingTrack = trackId;
+	loadTimingOffset(Settings::String(u"lyrics.offsets"_q));
 	layoutComments();
 	_status = QString::fromUtf8(Mokagram::Lang::Tr("Ищу текст…"));
 	updateTimer();
@@ -676,6 +685,9 @@ void LyricsView::mousePressEvent(QMouseEvent *e) {
 	}
 	if (const auto index = lineAt(e->pos().y()); index >= 0) {
 		const auto &lyric = _lyrics.lines[index];
+		const auto seek = [&](qint64 time) {
+			_lineClicked.fire_copy(std::max<qint64>(0, time - _timingOffset));
+		};
 		const auto &layout = *layoutOf(index).main;
 		const auto point = e->position() - lineOrigin(anchorY() - _scroll + topOf(index));
 		for (auto i = 0; !lyric.words.empty() && i < layout.lineCount(); ++i) {
@@ -686,14 +698,62 @@ void LyricsView::mousePressEvent(QMouseEvent *e) {
 			const auto offset = line.xToCursor(point.x(), QTextLine::CursorOnCharacter);
 			for (const auto &word : lyric.words) {
 				if (offset >= word.from && offset < word.to) {
-					_lineClicked.fire_copy(word.startMs);
+					seek(word.startMs);
 					return;
 				}
 			}
 			break;
 		}
-		_lineClicked.fire_copy(lyric.timeMs);
+		seek(lyric.timeMs);
 	}
+}
+
+void LyricsView::loadTimingOffset(const QString &json) {
+	const auto offsets = QJsonDocument::fromJson(json.toUtf8()).object();
+	const auto next = std::clamp(offsets.value(_timingTrack).toInt(), -10000, 10000);
+	if (_timingOffset != next) {
+		_timingOffset = next;
+		_scrollReady = false;
+		followPlayback();
+		tick();
+		update();
+	}
+}
+
+void LyricsView::contextMenuEvent(QContextMenuEvent *e) {
+	if (!_lyrics.synced || _timingTrack.isEmpty()) {
+		e->ignore();
+		return;
+	}
+	const auto menu = new Ui::PopupMenu(this, st::popupMenuWithIcons);
+	const auto trackId = _timingTrack;
+	const auto save = [=](int time) {
+		if (_timingTrack != trackId) {
+			return;
+		}
+		auto offsets = QJsonDocument::fromJson(
+			Settings::String(u"lyrics.offsets"_q).toUtf8()).object();
+		offsets.remove(trackId);
+		if (time != 0) {
+			if (offsets.size() >= 128) {
+				offsets.erase(offsets.begin());
+			}
+			offsets.insert(trackId, std::clamp(time, -10000, 10000));
+		}
+		Settings::SetString(u"lyrics.offsets"_q, offsets.isEmpty()
+			? QString()
+			: QString::fromUtf8(QJsonDocument(offsets).toJson(QJsonDocument::Compact)));
+	};
+	const auto add = [&](const char *label, int time) {
+		menu->addAction(QString::fromUtf8(Mokagram::Lang::Tr(label)), [=] { save(time); });
+	};
+	add("Текст раньше на 100 мс", _timingOffset + 100);
+	add("Текст позже на 100 мс", _timingOffset - 100);
+	if (_timingOffset != 0) {
+		add("Сбросить сдвиг текста", 0);
+	}
+	menu->popup(e->globalPos());
+	e->accept();
 }
 
 QPointF LyricsView::lineOrigin(double top) const {
@@ -775,7 +835,7 @@ void LyricsView::tick() {
 	auto changed = false;
 	auto needLayout = false;
 	if (_lyrics.found && _lyrics.synced && !_lyrics.lines.empty()) {
-		const auto position = livePosition();
+		const auto position = livePosition() + _timingOffset;
 		const auto at = position + 120;
 		// LRC lines are timestamp-sorted; upper_bound keeps the last duplicate.
 		const auto next = std::upper_bound(
@@ -1377,7 +1437,7 @@ private:
 		ResolveCommentsTrack(track, crl::guard(this, [=, id = track.id](QString sc) {
 			if (_lyricsFor == id) _view->setCommentsTrack(sc);
 		}));
-		_view->setLoading();
+		_view->setLoading(track.id);
 		const auto id = track.id;
 		FetchLyrics(
 			id,

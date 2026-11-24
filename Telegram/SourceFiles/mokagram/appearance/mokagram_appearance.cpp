@@ -271,6 +271,13 @@ void RegisterSettings() {
 		.hidden = true,
 	});
 	playerEntry({
+		.key = u"lyrics.offsets"_q,
+		.title = u"lyrics.offsets"_q,
+		.kind = S::Kind::String,
+		.defaultValue = QString(),
+		.hidden = true,
+	});
+	playerEntry({
 		.key = u"lyrics.subtitle"_q,
 		.title = QString::fromUtf8(Mokagram::Lang::Tr("Подстрочник песни")),
 		.description = QString::fromUtf8(Mokagram::Lang::Tr("Показывается, когда источник прислал перевод или транслитерацию.")),

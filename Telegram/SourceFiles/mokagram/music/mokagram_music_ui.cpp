@@ -11066,7 +11066,7 @@ private:
 			ResolveCommentsTrack(track, crl::guard(this, [=, id = track.id](QString sc) {
 				if (_lyricsFor == id) _view->setCommentsTrack(sc);
 			}));
-			_view->setLoading();
+			_view->setLoading(track.id);
 			const auto id = track.id;
 			FetchLyrics(
 				id,

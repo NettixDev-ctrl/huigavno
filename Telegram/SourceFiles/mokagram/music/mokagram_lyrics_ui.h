@@ -51,7 +51,7 @@ public:
 	void setBig(bool big);
 	void setBackground(Fn<void(QPainter&, QRect)> paint);
 	void setCoverTint(bool on);
-	void setLoading();
+	void setLoading(const QString &trackId);
 	void setLyrics(Lyrics lyrics);
 	void updateCover();
 	void setCommentsTrack(const QString &id);
@@ -67,10 +67,12 @@ protected:
 	void wheelEvent(QWheelEvent *e) override;
 	void mouseMoveEvent(QMouseEvent *e) override;
 	void mousePressEvent(QMouseEvent *e) override;
+	void contextMenuEvent(QContextMenuEvent *e) override;
 
 private:
 	[[nodiscard]] int lineAt(int y);
 	[[nodiscard]] QPointF lineOrigin(double top) const;
+	void loadTimingOffset(const QString &json);
 	void updateTimer();
 	void reset();
 	void invalidateLayouts();
@@ -114,6 +116,8 @@ private:
 	std::vector<double> _lineTops;
 	std::vector<LineLayout> _layouts;
 	int _subtitleMode = 0;
+	QString _timingTrack;
+	int _timingOffset = 0;
 	CoverBackground _backdrop;
 	Fn<void(QPainter&, QRect)> _background;
 	std::vector<float> _weights;

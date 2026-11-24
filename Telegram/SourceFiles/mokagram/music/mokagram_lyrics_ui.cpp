@@ -546,6 +546,13 @@ LyricsView::LyricsView(QWidget *parent)
 	PowerSaving::Changes() | rpl::on_next([=] {
 		updateTimer();
 	}, lifetime());
+	Settings::IntValue(u"lyrics.subtitle"_q) | rpl::on_next([=](int mode) {
+		_subtitleMode = mode;
+		invalidateLayouts();
+		_scrollReady = false;
+		tick();
+		update();
+	}, lifetime());
 }
 
 LyricsView::~LyricsView() = default;
@@ -669,7 +676,7 @@ void LyricsView::mousePressEvent(QMouseEvent *e) {
 	}
 	if (const auto index = lineAt(e->pos().y()); index >= 0) {
 		const auto &lyric = _lyrics.lines[index];
-		const auto &layout = layoutOf(index);
+		const auto &layout = *layoutOf(index).main;
 		const auto point = e->position() - lineOrigin(anchorY() - _scroll + topOf(index));
 		for (auto i = 0; !lyric.words.empty() && i < layout.lineCount(); ++i) {
 			const auto line = layout.lineAt(i);
@@ -895,30 +902,42 @@ void LyricsView::tick() {
 	return font;
 }
 
-[[nodiscard]] const QTextLayout &LyricsView::layoutOf(int index) {
+[[nodiscard]] const LyricsView::LineLayout &LyricsView::layoutOf(int index) {
 	if (_layouts.size() != _lyrics.lines.size()) {
 		_layouts.clear();
 		_layouts.resize(_lyrics.lines.size());
 	}
 	auto &layout = _layouts[index];
-	if (!layout) {
-		const auto &text = _lyrics.lines[index].text;
-		layout = std::make_unique<QTextLayout>(
-			text.isEmpty() ? u" "_q : text,
-			lineFont());
+	if (layout.main) {
+		return layout;
+	}
+	const auto width = textWidth();
+	const auto build = [&](const QString &text, const QFont &font) {
+		auto result = std::make_unique<QTextLayout>(text, font);
 		auto option = QTextOption(_big ? Qt::AlignLeft : Qt::AlignHCenter);
 		option.setWrapMode(QTextOption::WordWrap);
-		layout->setTextOption(option);
-		layout->beginLayout();
+		result->setTextOption(option);
+		result->beginLayout();
 		auto y = 0.;
-		for (auto line = layout->createLine(); line.isValid(); line = layout->createLine()) {
-			line.setLineWidth(textWidth());
+		for (auto line = result->createLine(); line.isValid(); line = result->createLine()) {
+			line.setLineWidth(width);
 			line.setPosition(QPointF(0., y));
 			y += line.height();
 		}
-		layout->endLayout();
+		result->endLayout();
+		return result;
+	};
+	const auto &line = _lyrics.lines[index];
+	layout.main = build(line.text.isEmpty() ? u" "_q : line.text, lineFont());
+	const auto subtitle = (_subtitleMode == 1)
+		? line.translation
+		: (_subtitleMode == 2) ? line.romanization : QString();
+	if (!subtitle.isEmpty()) {
+		auto font = st::normalFont->f;
+		font.setPixelSize(style::ConvertScale(_big ? 18 : 14));
+		layout.subtitle = build(subtitle, font);
 	}
-	return *layout;
+	return layout;
 }
 
 [[nodiscard]] int LyricsView::heightOf(int index) {
@@ -926,7 +945,10 @@ void LyricsView::tick() {
 		_heights.assign(_lyrics.lines.size(), -1);
 	}
 	if (_heights[index] < 0) {
-		_heights[index] = int(std::ceil(layoutOf(index).boundingRect().height()))
+		const auto &layout = layoutOf(index);
+		const auto secondary = layout.subtitle
+			? style::ConvertScale(4) + layout.subtitle->boundingRect().height() : 0.;
+		_heights[index] = int(std::ceil(layout.main->boundingRect().height() + secondary))
 			+ style::ConvertScale(_big ? 26 : 24);
 	}
 	return _heights[index];
@@ -961,8 +983,9 @@ void LyricsView::drawLayout(
 			const auto right = line.cursorToX(std::min(index + 1, till));
 			const auto x = origin.x() + left + (right - left) * (position - index);
 			auto gradient = QLinearGradient(x - feather, 0., x + feather, 0.);
-			gradient.setColorAt(0., white(sung));
-			gradient.setColorAt(1., white(unsung));
+			const auto rtl = layout.text().isRightToLeft();
+			gradient.setColorAt(0., white(rtl ? unsung : sung));
+			gradient.setColorAt(1., white(rtl ? sung : unsung));
 			p.setPen(QPen(QBrush(gradient), 1.));
 		}
 		line.draw(&p, origin);
@@ -1032,13 +1055,23 @@ void LyricsView::paintEvent(QPaintEvent *e) {
 					* smooth((height() - cy) / (height() * 0.28));
 			}
 			// Без масштабирования: текст с трансформацией не берётся из кэша глифов и тормозит.
+			const auto &layout = layoutOf(i);
+			const auto origin = lineOrigin(top);
 			drawLayout(
 				p,
-				layoutOf(i),
-				lineOrigin(top),
+				*layout.main,
+				origin,
 				(_lyrics.synced && i == _current) ? _fill : -1.,
 				(rest + (1. - rest) * w) * edge,
 				(rest + (0.45 - rest) * w) * edge);
+			if (layout.subtitle) {
+				auto shade = QColor(Qt::white);
+				shade.setAlphaF((rest + (0.67 - rest) * w) * edge);
+				p.setPen(shade);
+				layout.subtitle->draw(&p, origin + QPointF(
+					0.,
+					layout.main->boundingRect().height() + style::ConvertScale(4)));
+			}
 		}
 		top += lineHeight;
 		if (top > height() + 400) {

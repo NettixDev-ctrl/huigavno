@@ -84,7 +84,11 @@ private:
 	[[nodiscard]] double anchorY() const;
 	[[nodiscard]] int textWidth() const;
 	[[nodiscard]] QFont lineFont() const;
-	[[nodiscard]] const QTextLayout &layoutOf(int index);
+	struct LineLayout {
+		std::unique_ptr<QTextLayout> main;
+		std::unique_ptr<QTextLayout> subtitle;
+	};
+	[[nodiscard]] const LineLayout &layoutOf(int index);
 	[[nodiscard]] int heightOf(int index);
 	void drawLayout(
 			QPainter &p,
@@ -108,7 +112,8 @@ private:
 	QElapsedTimer _clock;
 	std::vector<int> _heights;
 	std::vector<double> _lineTops;
-	std::vector<std::unique_ptr<QTextLayout>> _layouts;
+	std::vector<LineLayout> _layouts;
+	int _subtitleMode = 0;
 	CoverBackground _backdrop;
 	Fn<void(QPainter&, QRect)> _background;
 	std::vector<float> _weights;

@@ -27,6 +27,8 @@ struct LyricLine {
 	qint64 timeMs = 0;
 	QString text;
 	std::vector<LyricWord> words = {};
+	QString translation = {};
+	QString romanization = {};
 };
 
 struct Lyrics {

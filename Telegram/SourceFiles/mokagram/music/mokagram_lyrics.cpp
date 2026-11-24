@@ -161,6 +161,24 @@ constexpr auto kRetryDelay = 1500;
 	return result;
 }
 
+[[nodiscard]] QString SubtitleAt(const Lyrics &source, qint64 timeMs) {
+	const auto end = source.lines.end();
+	const auto next = std::lower_bound(
+		source.lines.begin(),
+		end,
+		timeMs,
+		[](const LyricLine &line, qint64 time) { return line.timeMs < time; });
+	auto closest = next;
+	if (next != source.lines.begin()) {
+		const auto previous = std::prev(next);
+		if (next == end || timeMs - previous->timeMs < next->timeMs - timeMs) {
+			closest = previous;
+		}
+	}
+	return (closest != end && std::abs(closest->timeMs - timeMs) <= 180)
+		? closest->text : QString();
+}
+
 // Версии speed up и slowed идут быстрее или медленнее оригинала: метки времени
 // растягиваем во столько же раз, во сколько отличается длина трека.
 // Растягиваем метки, только если версия реально другой скорости.
@@ -632,14 +650,16 @@ void RequestNeteaseCandidate(
 	}
 	const auto candidate = candidates[index];
 	GetJson(
-		u"https://music.163.com/api/song/lyric?lv=1&kv=1&tv=-1&yv=-1&id="_q
+		u"https://music.163.com/api/song/lyric?lv=1&kv=1&tv=-1&yv=-1&rv=-1&id="_q
 			+ QString::number(candidate.id),
 		[=](QJsonDocument lyric) {
-			const auto text = lyric.object().value("lrc").toObject().value("lyric").toString();
-			auto result = ParseYrc(lyric.object().value("yrc")
-				.toObject().value("lyric").toString());
-			if (!result.found && !text.isEmpty()) {
-				result = ParseLrc(text);
+			const auto json = lyric.object();
+			const auto text = [&](const char *field) {
+				return json.value(field).toObject().value("lyric").toString();
+			};
+			auto result = ParseYrc(text("yrc"));
+			if (!result.found) {
+				result = ParseLrc(text("lrc"));
 			}
 			// Служебные строки с авторами (作词, 作曲...) не показываем.
 			static const auto credits = QRegularExpression(
@@ -653,6 +673,12 @@ void RequestNeteaseCandidate(
 				lines.end());
 			result.found = !lines.empty();
 			if (result.found) {
+				const auto translated = ParseLrc(text("tlyric"));
+				const auto romanized = ParseLrc(text("romalrc"));
+				for (auto &line : lines) {
+					line.translation = SubtitleAt(translated, line.timeMs);
+					line.romanization = SubtitleAt(romanized, line.timeMs);
+				}
 				ScaleTimes(result, candidate.ratio);
 				done(std::move(result));
 			} else {

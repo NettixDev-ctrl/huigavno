@@ -271,6 +271,19 @@ void RegisterSettings() {
 		.hidden = true,
 	});
 	playerEntry({
+		.key = u"lyrics.subtitle"_q,
+		.title = QString::fromUtf8(Mokagram::Lang::Tr("Подстрочник песни")),
+		.description = QString::fromUtf8(Mokagram::Lang::Tr("Показывается, когда источник прислал перевод или транслитерацию.")),
+		.kind = S::Kind::Choice,
+		.defaultValue = 0,
+		.choices = {
+			QString::fromUtf8(Mokagram::Lang::Tr("Только оригинал")),
+			QString::fromUtf8(Mokagram::Lang::Tr("Перевод от источника")),
+			QString::fromUtf8(Mokagram::Lang::Tr("Транслитерация")),
+		},
+		.dependsOn = u"lyrics.enabled"_q,
+	});
+	playerEntry({
 		.key = u"lyrics.plasma"_q,
 		.title = QString::fromUtf8(Mokagram::Lang::Tr("Оттенок обложки за текстом")),
 		.description = QString::fromUtf8(Mokagram::Lang::Tr("Лёгкий оттенок обложки на фоне текста песни.")),

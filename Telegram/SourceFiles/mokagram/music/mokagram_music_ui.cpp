@@ -2450,7 +2450,7 @@ public:
 			_equalizerTimer.setInterval(33);
 			connect(&_equalizerTimer, &QTimer::timeout, this, [=] {
 				_equalizerPhase += _equalizerClock.restart() / 1000.;
-				update();
+				update(listArtRect());
 			});
 			Media::Player::instance()->updatedNotifier(
 			) | rpl::on_next([=] { updateAnimation(); }, lifetime());
@@ -2522,8 +2522,8 @@ public:
 			}
 		});
 		paintRequest(
-		) | rpl::on_next([=](QRect) {
-			paint();
+		) | rpl::on_next([=](QRect area) {
+			paint(area);
 		}, lifetime());
 		events(
 		) | rpl::filter([](not_null<QEvent*> e) {
@@ -2801,7 +2801,7 @@ private:
 		popup();
 	}
 
-	void paint() {
+	void paint(QRect area) {
 		auto p = QPainter(this);
 		auto hq = PainterHighQualityEnabler(p);
 		const auto selected = (QueueState().currentId == _track.id);
@@ -2843,7 +2843,17 @@ private:
 		if (!_art.isNull()) {
 			p.save();
 			p.setClipPath(path);
-			p.drawImage(art, _art);
+			const auto ratio = devicePixelRatioF();
+			const auto pixels = art.size() * ratio;
+			if (_scaledArtKey != _art.cacheKey()
+				|| _scaledArt.size() != pixels
+				|| _scaledArt.devicePixelRatio() != ratio) {
+				_scaledArt = _art.scaled(
+					pixels, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+				_scaledArt.setDevicePixelRatio(ratio);
+				_scaledArtKey = _art.cacheKey();
+			}
+			p.drawImage(art, _scaledArt);
 			if (playing) {
 				p.fillRect(art, QColor(0, 0, 0, 120));
 			}
@@ -2867,6 +2877,9 @@ private:
 					2,
 					2);
 			}
+		}
+		if (art.contains(area)) {
+			return;
 		}
 		const auto duration = FormatDuration(_track.durationMs);
 		const auto durationWidth = st::normalFont->width(duration);
@@ -2983,6 +2996,8 @@ private:
 	TrackLikeButton *_likeButton = nullptr;
 	bool _glass = false;
 	QImage _art;
+	QImage _scaledArt;
+	qint64 _scaledArtKey = 0;
 	std::shared_ptr<Data::DocumentMedia> _media;
 	base::unique_qptr<Ui::PopupMenu> _menu;
 	QString _playlistId;
@@ -10290,7 +10305,8 @@ protected:
 		if (layout.barShown && _tab != Tab::Home) {
 			paintPlaybackBarBackground(p, layout);
 		}
-		if (!_coverMorph.animating()) {
+		if (!_coverMorph.animating()
+			&& e->region().intersects(expandedCoverRect(layout).toAlignedRect())) {
 			paintFullscreenCover(p, layout);
 		}
 		if (!layout.barShown || _tab == Tab::Home) {
@@ -10502,7 +10518,6 @@ private:
 				target->setBad();
 			}
 			if (_tab == Tab::Now) {
-				_view->update();
 				update(computeLayout().cover);
 			}
 		});
@@ -10624,10 +10639,12 @@ private:
 		const auto extent = style::ConvertScale(256);
 		const auto rasterSize = size().scaled(
 			QSize(extent, extent), Qt::KeepAspectRatio);
-		auto background = QImage(rasterSize, QImage::Format_RGBA64_Premultiplied);
-		background.fill(QColor(0x14, 0x14, 0x15));
+		if (_backdropRaster.size() != rasterSize) {
+			_backdropRaster = QImage(rasterSize, QImage::Format_RGBA64_Premultiplied);
+		}
+		_backdropRaster.fill(QColor(0x14, 0x14, 0x15));
 		{
-			auto raster = QPainter(&background);
+			auto raster = QPainter(&_backdropRaster);
 			auto hq = PainterHighQualityEnabler(raster);
 			raster.scale(
 				rasterSize.width() / double(width()),
@@ -10654,7 +10671,7 @@ private:
 		auto p = QPainter(&_preparedBackdrop);
 		p.setRenderHint(QPainter::SmoothPixmapTransform);
 		const auto area = QRectF(QPointF(), _preparedBackdrop.deviceIndependentSize());
-		p.drawImage(area, background);
+		p.drawImage(area, _backdropRaster);
 		p.fillRect(area, grain);
 	}
 
@@ -11050,6 +11067,7 @@ private:
 	QString _canvasPaletteFor;
 	crl::time _canvasPaletteNext = 0;
 	QImage _preparedBackdrop;
+	QImage _backdropRaster;
 	bool _backdropDirty = true;
 	crl::time _animatedBackdropFrame = -1;
 	[[nodiscard]] bool animatesBackdrop() const {

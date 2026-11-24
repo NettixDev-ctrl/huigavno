@@ -57,7 +57,6 @@
 #include "history/history.h"
 #include "history/history_item.h"
 #include "history/view/history_view_element.h"
-#include "lang/lang_keys.h"
 #include "lang/lang_tag.h"
 #include "mokagram/plugins/mokagram_plugin_install.h"
 #include "storage/storage_media_prepare.h"
@@ -12356,7 +12355,8 @@ void ShowCurrentTrackMenu(
 			action->setChecked(std::abs(rate - currentSpeed) < 0.001);
 		}
 		menu->addAction(
-			tr::lng_mediaview_playback_speed(tr::now) + u" · "_q + speedText(currentSpeed),
+			QString::fromUtf8(Mokagram::Lang::Tr("Скорость воспроизведения"))
+				+ u" · "_q + speedText(currentSpeed),
 			std::move(submenu),
 			nullptr);
 	}

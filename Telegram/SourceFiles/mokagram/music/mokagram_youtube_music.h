@@ -12,15 +12,31 @@
 namespace Mokagram::Music {
 
 struct Track;
+struct Album;
+struct ArtistInfo;
+
+// Native YouTube Music identities use "yt:" followed by a UC / album browse id.
+// Call on the main thread; callbacks run on the main thread.
+void ResolveYouTubeMusicArtist(
+	const QString &name,
+	Fn<void(ArtistInfo)> done);
+
+// Keeps a known native channel identity; shares artist browse requests with catalog.
+void LoadYouTubeMusicArtistInfo(
+	const QString &artistId,
+	Fn<void(ArtistInfo)> done);
+
+// Loads every native songs/releases page, including continuations.
+void LoadYouTubeMusicArtistCatalog(
+	const QString &artistId,
+	Fn<void(std::vector<Track>, std::vector<Album>, QString)> done);
+
+// Keeps the native album track order. Errors are never reported as empty success.
+void LoadYouTubeMusicAlbum(
+	const QString &albumId,
+	Fn<void(std::vector<Track>, QString)> done);
 
 [[nodiscard]] bool HasYouTubeMusicMetadata(const Track &track);
-
-// Популярные песни исполнителя из каталога YouTube Music. Возвращает
-// неиграемые напрямую Track с videoId: плеер скачивает их через yt-dlp.
-void LoadArtistTracks(
-	const QString &artist,
-	int limit,
-	Fn<void(std::vector<Track>)> done);
 
 // Рекомендации YouTube Music для трека с известным videoId.
 void LoadYouTubeMusicRecommendations(

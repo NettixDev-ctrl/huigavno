@@ -1198,12 +1198,13 @@ void ResolveTrackArtist(
 				for (const auto &value : collection) {
 					const auto object = value.toObject();
 					if (!matches(object.value("username").toString())
-					&& !matches(object.value("full_name").toString())) {
+						&& !matches(object.value("full_name").toString())) {
 						continue;
 					}
 					auto artist = ParseArtistInfo(object, QString());
-					const auto rank = std::pair(
+					const auto rank = std::tuple(
 						object.value("verified").toBool(),
+						!artist.bannerUrl.isEmpty(),
 						object.value("followers_count").toVariant().toLongLong());
 					if (!artist.id.isEmpty() && (best.id.isEmpty() || rank > bestRank)) {
 						best = std::move(artist);

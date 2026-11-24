@@ -10961,8 +10961,8 @@ private:
 	std::array<bool, 5> _searchFilterAvailable = {};
 	SearchCategory _searchCategory = SearchCategory::All;
 	std::vector<CatalogItem> _catalogItems;
-	int _searchArtistReturnScroll = 0;
-	bool _homeArtistBackToSearch = false;
+	int _searchReturnScroll = 0;
+	bool _homeBackToSearch = false;
 	QTimer _searchTimer;
 	std::unique_ptr<ChatMusicSearch> _chatSearch;
 	std::vector<Track> _searchTracks;

@@ -6,7 +6,8 @@ mokaGram (24.11.26)
 - Release completed recommendation and sync state; pause hidden Canvas playback.
 - Open search albums in the full album page and preserve search position on return.
 - Preserve native YouTube Music artist and album identities instead of remapping by name.
-- Load paginated artist catalogues, including singles and EPs, without the twelve-track cutoff.
+- Load paginated artist catalogues, preview twelve tracks and reveal more on demand.
+- Fix YouTube Music MPAD artist-discography navigation and song shelf links.
 
 7.4.4 (13.11.26)
 

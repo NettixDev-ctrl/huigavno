@@ -11550,6 +11550,7 @@ void TogetherLog(const QString &line);
 
 constexpr auto kTogetherPollMs = 700;
 constexpr auto kTogetherDriftMs = 700;
+constexpr auto kShowTogetherInPlayer = false;
 
 // Сообщает, когда число слушателей изменилось (первый раз молча).
 void TogetherNoteListeners(int count) {
@@ -12132,6 +12133,12 @@ void TogetherJoinBox(not_null<Window::SessionController*> controller) {
 void AddTogetherActions(
 		not_null<Ui::PopupMenu*> menu,
 		not_null<Window::SessionController*> controller) {
+	if (!kShowTogetherInPlayer) {
+		return;
+	}
+	if (!menu->empty()) {
+		menu->addSeparator();
+	}
 	const auto add = [&](const QString &text, Fn<void()> callback, const style::icon *icon) {
 		menu->addAction(text, std::move(callback), icon);
 	};
@@ -12202,7 +12209,6 @@ void ShowCurrentTrackMenu(
 		return;
 	}
 	if (track.id.isEmpty()) {
-		// Ничего не играет: в меню только вход в комнату.
 		AddTogetherActions(menu.get(), controller);
 		menu->popup(globalPosition);
 		return;
@@ -12254,7 +12260,6 @@ void ShowCurrentTrackMenu(
 	menu->addSeparator();
 	add(QString::fromUtf8(Mokagram::Lang::Tr("Поиск музыки")), [=] { ShowMusicBox(controller); }, &st::menuIconSearch);
 	add(QString::fromUtf8(Mokagram::Lang::Tr("Очередь")), [=] { ShowPlayerBox(controller); }, &st::menuIconChats);
-	menu->addSeparator();
 	AddTogetherActions(menu.get(), controller);
 	menu->popup(globalPosition);
 }

@@ -7614,6 +7614,7 @@ public:
 			const auto elapsed = std::min((now - _ambientAt) / 1000., 0.1);
 			_ambientAt = now;
 			if (animatesBackdrop()) {
+				updateBackdropEnergy(elapsed);
 				repaintAnimatedBackdrop(now);
 			}
 			if (_seek->waveAnimating()) {
@@ -10737,6 +10738,19 @@ private:
 		}
 	}
 
+	void updateBackdropEnergy(double elapsed) {
+		const auto state = Media::Player::instance()->getState(AudioMsgId::Type::Song);
+		const auto &bands = state.visualizerLevels;
+		const auto bass = state.waitingForData
+			? 0.
+			: 0.75 * bands[0] + 0.25 * bands[1];
+		const auto accent = std::max(0., bass - _backgroundBass);
+		_backgroundBass += (bass - _backgroundBass) * (1. - std::exp(-elapsed * 2.));
+		const auto target = std::clamp(bass * 0.2 + accent * 2.5, 0., 1.);
+		const auto release = std::exp(-elapsed * 7.);
+		_backgroundPulse = std::max(target, _backgroundPulse * release);
+	}
+
 	void updateBackdropPalette() {
 		if (_tab == Tab::Now && crl::now() >= _canvasPaletteNext) {
 			_canvasPaletteNext = crl::now() + 3000;
@@ -10837,6 +10851,11 @@ private:
 
 	void paintBackdrop(QPainter &p) {
 		const auto area = rect();
+		const auto pulse = animatesBackdrop()
+			&& !PowerSaving::On(PowerSaving::kAnimations)
+			&& QGuiApplication::applicationState() == Qt::ApplicationActive
+			? _backgroundPulse
+			: 0.;
 		if (Mokagram::Settings::Bool(u"player.cover_colors"_q)) {
 			if (_canvasBackground.isNull()) {
 				_backdrop.paint(p, area, area);
@@ -10850,7 +10869,7 @@ private:
 					height() * (0.5 + 0.25 * std::cos(phase * 0.7)));
 				auto glow = QRadialGradient(center, std::max(width(), height()) * 0.7);
 				auto color = _accent;
-				color.setAlpha(60);
+				color.setAlpha(int(60 + 24 * pulse));
 				glow.setColorAt(0., color);
 				color.setAlpha(0);
 				glow.setColorAt(1., color);
@@ -10861,17 +10880,12 @@ private:
 		}
 		const auto layout = computeLayout();
 		if (!layout.cover.isEmpty() && _accent.isValid()) {
-			const auto pulse = (_isPlaying
-				&& Mokagram::Settings::Bool(u"player.dynamic_background"_q)
-				&& !PowerSaving::On(PowerSaving::kAnimations))
-				? (0.5 + 0.5 * std::sin(crl::now() / 2200.))
-				: 0.;
 			const auto cover = QRectF(layout.cover);
 			auto glow = QRadialGradient(
 				cover.center(),
 				std::max(cover.width(), cover.height()) * 0.8);
 			auto color = _accent;
-			color.setAlpha(int(45 + 15 * pulse));
+			color.setAlpha(int(45 + 38 * pulse));
 			glow.setColorAt(0., color);
 			color.setAlpha(0);
 			glow.setColorAt(1., color);
@@ -10884,6 +10898,7 @@ private:
 		const auto track = PlayingTrack();
 		if (_canvasPaletteFor != track.id) {
 			_canvasPaletteFor = track.id;
+			_backgroundBass = _backgroundPulse = 0.;
 			_canvasFade.stop();
 			_canvasBackground = QImage();
 			_canvasBackgroundFrom = QImage();
@@ -11251,9 +11266,11 @@ private:
 	QImage _preparedBackdrop;
 	QImage _backdropRaster;
 	bool _backdropDirty = true;
+	double _backgroundBass = 0.;
+	double _backgroundPulse = 0.;
 	crl::time _animatedBackdropFrame = -1;
 	[[nodiscard]] bool animatesBackdrop() const {
-		return _isPlaying && _tab == Tab::Now
+		return _isPlaying && _tab == Tab::Now && !anim::Disabled()
 			&& Mokagram::Settings::Bool(u"player.dynamic_background"_q);
 	}
 	void updateAmbientTimer() {

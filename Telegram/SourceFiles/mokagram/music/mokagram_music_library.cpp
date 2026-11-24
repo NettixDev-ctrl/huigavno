@@ -232,6 +232,9 @@ struct Library : LibraryData {
 			album.insert("artist", item.album.artist);
 			album.insert("art", item.album.artworkUrl);
 			album.insert("count", item.album.trackCount);
+			album.insert("artistId", item.album.artistId);
+			album.insert("releaseKind", int(item.album.releaseKind));
+			album.insert("releaseYear", item.album.releaseYear);
 			o.insert("data", album);
 		} else {
 			o.insert("data", ToJson(item.track));
@@ -403,6 +406,12 @@ Library &Lib() {
 					item.album.artist = data.value("artist").toString();
 					item.album.artworkUrl = data.value("art").toString();
 					item.album.trackCount = data.value("count").toInt();
+					item.album.artistId = data.value("artistId").toString();
+					const auto kind = data.value("releaseKind").toInt();
+					item.album.releaseKind = (kind >= int(ReleaseKind::Unknown)
+						&& kind <= int(ReleaseKind::Compilation))
+						? ReleaseKind(kind) : ReleaseKind::Unknown;
+					item.album.releaseYear = data.value("releaseYear").toInt();
 					if (item.album.id.isEmpty()) continue;
 				} else {
 					item.track = FromJson(data);

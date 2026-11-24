@@ -7705,11 +7705,13 @@ public:
 protected:
 	void showEvent(QShowEvent *event) override {
 		RpWidget::showEvent(event);
+		_canvas.setVisible(true);
 		updateAmbientTimer();
 	}
 	void hideEvent(QHideEvent *event) override {
 		_searchHintMenu.hide();
 		_ambientTimer.stop();
+		_canvas.setVisible(false);
 		_preparedBackdrop = QImage();
 		RpWidget::hideEvent(event);
 	}

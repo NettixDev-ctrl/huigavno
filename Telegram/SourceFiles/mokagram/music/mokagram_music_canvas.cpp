@@ -60,7 +60,7 @@ CanvasPlayer::CanvasPlayer(QObject *parent, Fn<void()> repaint)
 : QObject(parent)
 , _repaint(std::move(repaint))
 , _loadingAnimation([=](crl::time) {
-	if (!_loading
+	if (!_loading || !_visible
 		|| anim::Disabled()
 		|| PowerSaving::On(PowerSaving::kAnimations)
 		|| QGuiApplication::applicationState() != Qt::ApplicationActive) {
@@ -79,6 +79,20 @@ CanvasPlayer::~CanvasPlayer() {
 	_requests.reset();
 	_playbackLifetime.destroy();
 	_player.reset();
+}
+
+void CanvasPlayer::setVisible(bool visible) {
+	if (_visible == visible) {
+		return;
+	}
+	_visible = visible;
+	if (!visible) {
+		_loadingAnimation.stop();
+	}
+	updatePlayback();
+	if (visible) {
+		_repaint();
+	}
 }
 
 void CanvasPlayer::refresh(
@@ -352,7 +366,7 @@ void CanvasPlayer::updatePlayback() {
 	if (!_player || _player->failed()) {
 		return;
 	}
-	const auto animate = _playing
+	const auto animate = _playing && _visible
 		&& !anim::Disabled()
 		&& !PowerSaving::On(PowerSaving::kAnimations)
 		&& QGuiApplication::applicationState() == Qt::ApplicationActive;
@@ -397,7 +411,7 @@ void CanvasPlayer::paintLoading(QPainter &p, QRect area, QColor color) {
 	if (!_loading || area.isEmpty()) {
 		return;
 	}
-	const auto animate = _loadingProgress < 0.
+	const auto animate = _visible && _loadingProgress < 0.
 		&& !anim::Disabled()
 		&& !PowerSaving::On(PowerSaving::kAnimations)
 		&& QGuiApplication::applicationState() == Qt::ApplicationActive;

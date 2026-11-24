@@ -108,6 +108,7 @@
 #include "ui/widgets/labels.h"
 #include "ui/wrap/padding_wrap.h"
 #include "ui/wrap/vertical_layout.h"
+#include "ui/wrap/vertical_layout_reorder.h"
 #include "ui/widgets/scroll_area.h"
 #include "media/player/media_player_volume_controller.h"
 #include "window/window_session_controller.h"
@@ -1602,11 +1603,13 @@ void QueueMove(int index, int delta) {
 		|| target < 0 || target >= int(queue.tracks.size())) {
 		return;
 	}
-	std::swap(queue.tracks[index], queue.tracks[target]);
+	base::reorder(queue.tracks, index, target);
 	if (queue.index == index) {
 		queue.index = target;
-	} else if (queue.index == target) {
-		queue.index = index;
+	} else if (index < queue.index && queue.index <= target) {
+		--queue.index;
+	} else if (target <= queue.index && queue.index < index) {
+		++queue.index;
 	}
 	queue.custom = true;
 	queue.changes.fire({});
@@ -2494,6 +2497,9 @@ public:
 		}, lifetime());
 		const auto playIndex = (resultIndex >= 0) ? resultIndex : index;
 		setClickedCallback([=] {
+			if (_queueDragging) {
+				return;
+			}
 			if (_mode == RowMode::Home && open) {
 				const auto s = [](int v) { return style::ConvertScale(v); };
 				const auto inset = s(12);
@@ -2547,6 +2553,10 @@ public:
 				t.tags, t.playbackCount, t.likesCount, t.createdAt, t.uploaderName);
 		};
 		return _mode == mode && _queueIndex == index && fields(_track) == fields(track);
+	}
+
+	void setQueueDragging(bool dragging) {
+		_queueDragging = dragging;
 	}
 
 	void setTextLinks(Fn<void(Track)> title, Fn<void(const Track&, const QString&)> artist) {
@@ -2993,6 +3003,7 @@ private:
 	QString _playsText;
 	RowMode _mode;
 	const int _queueIndex;
+	bool _queueDragging = false;
 	std::shared_ptr<std::vector<Track>> _results;
 	bool _catalogStyle = false;
 	bool _homePlaybackControls = true;
@@ -7195,6 +7206,27 @@ public:
 		_queuePanel->hide();
 		_queueList = _queueScroll->setOwnedWidget(
 			object_ptr<Ui::VerticalLayout>(_queueScroll));
+		_queueReorder = std::make_unique<Ui::VerticalLayoutReorder>(_queueList, _queueScroll);
+		_queueReorder->updates() | rpl::on_next([=](Ui::VerticalLayoutReorder::Single change) {
+			using State = Ui::VerticalLayoutReorder::State;
+			const auto row = QPointer(dynamic_cast<Row*>(change.widget.get()));
+			if (!row) {
+				return;
+			}
+			if (change.state == State::Started) {
+				row->setQueueDragging(true);
+				return;
+			}
+			const auto revision = _queueLayoutRevision;
+			Ui::PostponeCall(this, [=] {
+				if (row) {
+					row->setQueueDragging(false);
+				}
+				if (change.state == State::Applied && _queueLayoutRevision == revision) {
+					QueueMove(change.oldPosition, change.newPosition - change.oldPosition);
+				}
+			});
+		}, lifetime());
 		const auto queueSearchLabel = QString::fromUtf8(Mokagram::Lang::Tr("Поиск в очереди"));
 		_queueSearch = Ui::CreateChild<Ui::InputField>(
 			_queuePanel, st::defaultInputField, rpl::single(queueSearchLabel));
@@ -10201,6 +10233,8 @@ protected:
 	}
 
 	void refreshQueuePanel() {
+		++_queueLayoutRevision;
+		_queueReorder->cancel();
 		fillQueue(_queueList, _queueScroll, _queueList, _queueSearch->getLastText());
 		_queuePanel->update();
 	}
@@ -10273,6 +10307,9 @@ protected:
 		content->resizeToWidth(scroll->width());
 		if (terms.empty() && active >= 0) {
 			scroll->scrollToY(list->widgetAt(std::max(active - 1, 0))->y());
+		}
+		if (list.get() == _queueList && inQueue && terms.empty()) {
+			_queueReorder->start();
 		}
 	}
 
@@ -11038,6 +11075,8 @@ private:
 	const not_null<Ui::ScrollArea*> _queueScroll;
 	Ui::InputField *_queueSearch = nullptr;
 	Ui::VerticalLayout *_queueList = nullptr;
+	std::unique_ptr<Ui::VerticalLayoutReorder> _queueReorder;
+	int _queueLayoutRevision = 0;
 	bool _queuePanelOpen = false;
 	Ui::Animations::Simple _queueSlide;
 	const not_null<Ui::RpWidget*> _playbackBar;

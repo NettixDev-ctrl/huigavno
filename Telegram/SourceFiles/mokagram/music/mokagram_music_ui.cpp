@@ -9663,12 +9663,8 @@ protected:
 					crl::guard(this, [=] { playHomeArtist(); }),
 					crl::guard(this, [=] {
 						if (!_homeAlbum.artistId.isEmpty()) {
-							auto seed = Track();
-							seed.id = _homeAlbum.id;
-							seed.artist = _homeAlbum.artist;
-							seed.uploaderName = _homeAlbum.artist;
-							seed.artistId = _homeAlbum.artistId;
-							chooseTrackArtist(seed);
+							showArtistProfile({
+								_homeAlbum.artistId, _homeAlbum.artist, {}, {} });
 							return;
 						}
 						const auto artistTrack = std::find_if(

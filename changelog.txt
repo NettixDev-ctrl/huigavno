@@ -1,3 +1,10 @@
+mokaGram (24.11.26)
+
+- Improve music player responsiveness on macOS without reducing animation quality.
+- Cache Retina artwork and island geometry, reuse queue rows and index lyrics.
+- Move music persistence, artwork decoding and cache maintenance off the UI thread.
+- Release completed recommendation and sync state; pause hidden Canvas playback.
+
 7.4.4 (13.11.26)
 
 - Bug fixes and other minor improvements.

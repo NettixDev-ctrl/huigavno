@@ -9,6 +9,7 @@
 #include "mokagram/plugins/mokagram_plugins.h"
 #include "mokagram/plugins/mokagram_plugin_install.h"
 #include "mokagram/plugins/mokagram_plugin_store.h"
+#include "mokagram/quote/mokagram_quote.h"
 #include "mokagram/settings/mokagram_settings.h"
 
 #include "api/api_common.h"
@@ -215,9 +216,10 @@ rpl::lifetime BridgeLifetime;
 // import __main__. Свободно: папка данных плагина и временные файлы (как в
 // sdk_api._path_ok). Остальное (Загрузки, Картинки, Музыка, Документы) только
 // при выданном праве files. Конечный симлинк не допускается никогда.
-[[nodiscard]] bool PluginPathAllowed(const QString &path) {
+[[nodiscard]] bool PluginPathAllowed(
+		const QString &path,
+		const QString &pid = QString::fromStdString(NativeCallerPid())) {
 	// pid берётся у моста (плагин, чей вызов), а не из JSON-аргументов: их можно подменить.
-	const auto pid = QString::fromStdString(NativeCallerPid());
 	if (path.isEmpty() || pid.isEmpty()) {
 		return false;
 	}
@@ -1268,6 +1270,21 @@ std::string SendFile(const QJsonObject &args) {
 		if (list.files.empty() && list.filesToProcess.empty()) {
 			return Reply(false, U(Mokagram::Lang::Tr("файл нельзя отправить")));
 		}
+		// Static photos must own their pixels before returning to the plugin:
+		// sendFiles runs later, after the caller may remove its temporary PNG.
+		if (asPhoto && !list.files.empty()) {
+			auto &file = list.files.front();
+			const auto image = file.information
+				? std::get_if<Ui::PreparedFileInformation::Image>(
+					&file.information->media)
+				: nullptr;
+			if (image && !image->animated && !image->data.isNull()) {
+				list = Storage::PrepareMediaFromImage(
+					std::move(image->data),
+					QByteArray(),
+					st::sendMediaPreviewSize);
+			}
+		}
 		if (!list.files.empty()) {
 			list.files.front().caption = TextWithTags{ caption };
 		}
@@ -1643,6 +1660,67 @@ std::string DownloadMedia(const QJsonObject &args) {
 			}
 		});
 		timer->start(300);
+		return Reply(true);
+	});
+}
+
+std::string RenderMessage(const QJsonObject &args) {
+	const auto pid = QString::fromStdString(NativeCallerPid());
+	const auto token = args.value("token").toString();
+	const auto path = QFileInfo(args.value("path").toString()).absoluteFilePath();
+	if (!PluginHasGrant(pid, u"messages.read"_q)) {
+		return Reply(false, u"messages.read permission required"_q);
+	}
+	if (token.isEmpty() || args.value("path").toString().isEmpty()
+		|| !PluginPathAllowed(path, pid)) {
+		return Reply(false, u"invalid or forbidden output path"_q);
+	}
+	return OnMain([=]() -> std::string {
+		const auto item = FindItem(args);
+		const auto window = Core::App().activeWindow();
+		const auto controller = window ? window->sessionController() : nullptr;
+		const auto session = ActiveSession();
+		if (!item || !controller || !session
+			|| &controller->session() != session) {
+			return Reply(false, u"source message or session unavailable"_q);
+		}
+		const auto weak = base::make_weak(session);
+		Quote::RenderMessageShot(
+			controller,
+			{ item->fullId() },
+			args.value("ramka").toBool(),
+			[=](QImage image) {
+				auto error = QString();
+				if (Stopping() || !weak.get() || ActiveSession() != weak.get()) {
+					error = u"source session unavailable"_q;
+				} else if (!PluginHasGrant(pid, u"messages.read"_q)) {
+					error = u"messages.read permission revoked"_q;
+				} else if (image.isNull()) {
+					error = u"source message could not be rendered"_q;
+				} else if (!PluginPathAllowed(path, pid)
+					|| !QDir().mkpath(QFileInfo(path).absolutePath())
+					|| !PluginPathAllowed(path, pid)) {
+					error = u"output path unavailable or forbidden"_q;
+				} else {
+					auto file = QSaveFile(path);
+					if (!file.open(QIODevice::WriteOnly)
+						|| !image.save(&file, "PNG")
+						|| !file.commit()) {
+						error = u"could not save screenshot PNG"_q;
+					}
+				}
+				auto payload = QJsonObject{ { "ok", error.isEmpty() } };
+				if (error.isEmpty()) {
+					payload.insert("path", path);
+				} else {
+					payload.insert("error", error);
+				}
+				QueueEvent("__cb", Json(QJsonObject{
+					{ "pid", pid },
+					{ "token", token },
+					{ "payload", payload },
+				}));
+			});
 		return Reply(true);
 	});
 }
@@ -2951,6 +3029,8 @@ std::string Bridge(const std::string &op, const std::string &argsJson) {
 		return SendAlbum(args);
 	} else if (op == "download_media") {
 		return DownloadMedia(args);
+	} else if (op == "render_message") {
+		return RenderMessage(args);
 	} else if (op == "backup_client_file") {
 		return BackupClientFile(args);
 	} else if (op == "restore_stage_begin") {

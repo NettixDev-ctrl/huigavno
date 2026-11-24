@@ -138,6 +138,7 @@
 #include <QtCore/QPointer>
 #include <array>
 #include <cmath>
+#include <tuple>
 
 namespace Mokagram::Music {
 namespace {
@@ -2449,7 +2450,7 @@ public:
 			_equalizerTimer.setInterval(33);
 			connect(&_equalizerTimer, &QTimer::timeout, this, [=] {
 				_equalizerPhase += _equalizerClock.restart() / 1000.;
-				update();
+				update(listArtRect());
 			});
 			Media::Player::instance()->updatedNotifier(
 			) | rpl::on_next([=] { updateAnimation(); }, lifetime());
@@ -2521,8 +2522,8 @@ public:
 			}
 		});
 		paintRequest(
-		) | rpl::on_next([=](QRect) {
-			paint();
+		) | rpl::on_next([=](QRect area) {
+			paint(area);
 		}, lifetime());
 		events(
 		) | rpl::filter([](not_null<QEvent*> e) {
@@ -2533,6 +2534,17 @@ public:
 				showMenu(controller, playIndex, static_cast<QContextMenuEvent*>(e.get()));
 			}
 		}, lifetime());
+	}
+
+	[[nodiscard]] bool matchesQueueTrack(const Track &track, RowMode mode) const {
+		const auto fields = [](const Track &t) {
+			return std::tie(
+				t.id, t.title, t.artist, t.videoId, t.artworkUrl, t.permalink,
+				t.transcodingUrl, t.authorization, t.extension, t.durationMs,
+				t.hls, t.unavailable, t.artistId, t.artistArtworkUrl, t.genre,
+				t.tags, t.playbackCount, t.likesCount, t.createdAt, t.uploaderName);
+		};
+		return _mode == mode && fields(_track) == fields(track);
 	}
 
 	void setTextLinks(Fn<void(Track)> title, Fn<void(const Track&, const QString&)> artist) {
@@ -2789,7 +2801,7 @@ private:
 		popup();
 	}
 
-	void paint() {
+	void paint(QRect area) {
 		auto p = QPainter(this);
 		auto hq = PainterHighQualityEnabler(p);
 		const auto selected = (QueueState().currentId == _track.id);
@@ -2831,7 +2843,17 @@ private:
 		if (!_art.isNull()) {
 			p.save();
 			p.setClipPath(path);
-			p.drawImage(art, _art);
+			const auto ratio = devicePixelRatioF();
+			const auto pixels = art.size() * ratio;
+			if (_scaledArtKey != _art.cacheKey()
+				|| _scaledArt.size() != pixels
+				|| _scaledArt.devicePixelRatio() != ratio) {
+				_scaledArt = _art.scaled(
+					pixels, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+				_scaledArt.setDevicePixelRatio(ratio);
+				_scaledArtKey = _art.cacheKey();
+			}
+			p.drawImage(art, _scaledArt);
 			if (playing) {
 				p.fillRect(art, QColor(0, 0, 0, 120));
 			}
@@ -2855,6 +2877,9 @@ private:
 					2,
 					2);
 			}
+		}
+		if (art.contains(area)) {
+			return;
 		}
 		const auto duration = FormatDuration(_track.durationMs);
 		const auto durationWidth = st::normalFont->width(duration);
@@ -2971,6 +2996,8 @@ private:
 	TrackLikeButton *_likeButton = nullptr;
 	bool _glass = false;
 	QImage _art;
+	QImage _scaledArt;
+	qint64 _scaledArtKey = 0;
 	std::shared_ptr<Data::DocumentMedia> _media;
 	base::unique_qptr<Ui::PopupMenu> _menu;
 	QString _playlistId;
@@ -3908,13 +3935,28 @@ public:
 			_scroll = Ui::CreateChild<Ui::ScrollArea>(this, st::defaultScrollArea);
 			_content = _scroll->setOwnedWidget(object_ptr<Ui::RpWidget>(_scroll));
 			_scroll->setCustomWheelProcess([=](not_null<QWheelEvent*> event) {
-				auto delta = event->pixelDelta().x();
-				if (!delta) delta = event->angleDelta().x() / 2;
-				if (!delta && event->modifiers().testFlag(Qt::ShiftModifier)) {
-					delta = event->angleDelta().y() / 2;
+				// Keep a trackpad gesture on one axis, including its momentum.
+				auto delta = event->pixelDelta();
+				if (delta.isNull()) {
+					delta = event->angleDelta() / 2;
 				}
-				if (!delta) return false;
-				_scroll->scrollToX(_scroll->scrollLeft() - delta);
+				if (event->modifiers().testFlag(Qt::ShiftModifier)
+					&& std::abs(delta.y()) > std::abs(delta.x())) {
+					delta = QPoint(delta.y(), 0);
+				}
+				const auto axis = _wheelDirectionLock.update(
+					event->phase(), delta).value_or(
+						std::abs(delta.x()) > std::abs(delta.y())
+							? Qt::Horizontal
+							: Qt::Vertical);
+				if (axis != Qt::Horizontal) {
+					// Skip QScrollArea's fallback and let the Home feed scroll.
+					event->ignore();
+					return true;
+				}
+				_slide.stop();
+				_scroll->scrollToX(_scroll->scrollLeft() - delta.x());
+				event->accept();
 				return true;
 			});
 			_scroll->scrolls() | rpl::on_next([=] {
@@ -4038,6 +4080,7 @@ private:
 	HomeEdgeFade *_fadeLeft = nullptr;
 	HomeEdgeFade *_fadeRight = nullptr;
 	Ui::Animations::Simple _slide;
+	Ui::ScrollDirectionLock _wheelDirectionLock;
 	std::vector<Ui::RpWidget*> _items;
 
 };
@@ -6960,6 +7003,101 @@ constexpr auto kBackdropFrameInterval = 100;
 		std::max(double(hsl.lightnessF()), kMinLightness));
 }
 
+[[nodiscard]] QRectF CoverSourceRect(QSizeF source, QSizeF target) {
+	const auto scale = std::max(target.width() / source.width(), target.height() / source.height());
+	const auto crop = target / scale;
+	return QRectF(QPointF(source.width() - crop.width(), source.height() - crop.height()) / 2., crop);
+}
+
+class CoverTransition final {
+public:
+	void reset(QRectF rect, double radius, double smoothing, double expanded) {
+		_rect = rect;
+		_expanded = expanded;
+		_path = preparePath(rect, radius, smoothing);
+	}
+	void retarget(QRectF rect, double radius, double smoothing, double expanded) {
+		_fromRect = _rect;
+		_toRect = rect;
+		_fromExpanded = _expanded;
+		_toExpanded = expanded;
+		_fromPath = _path;
+		_toPath = preparePath(rect, radius, smoothing);
+		Expects(_fromPath.elementCount() == _toPath.elementCount());
+	}
+	void update(double progress) {
+		_rect = QRectF(
+			_fromRect.topLeft() + (_toRect.topLeft() - _fromRect.topLeft()) * progress,
+			_fromRect.size() + (_toRect.size() - _fromRect.size()) * progress);
+		_expanded = _fromExpanded + (_toExpanded - _fromExpanded) * progress;
+		// Keep the same path storage after the first update of a transition.
+		for (auto i = 0; i != _path.elementCount(); ++i) {
+			const auto from = _fromPath.elementAt(i);
+			const auto to = _toPath.elementAt(i);
+			_path.setElementPositionAt(
+				i, progress == 1. ? to.x : from.x + (to.x - from.x) * progress,
+				progress == 1. ? to.y : from.y + (to.y - from.y) * progress);
+		}
+		if (progress == 1.) {
+			_rect = _toRect;
+			_expanded = _toExpanded;
+		}
+	}
+	[[nodiscard]] const QRectF &rect() const { return _rect; }
+	[[nodiscard]] const QPainterPath &path() const { return _path; }
+	[[nodiscard]] double expanded() const { return _expanded; }
+
+private:
+	static QPainterPath preparePath(QRectF rect, double radius, double smoothing) {
+		const auto source = Ui::SquirclePath(rect, radius, smoothing);
+		if (source.elementCount() == 41) return source;
+		// Qt removes zero-length curves and sides. Restore three cubics per
+		// corner, including the degenerate cubics beside a circular arc.
+		auto result = Ui::SquirclePath(QRectF(0., 0., 1., 1.), 0.1);
+		auto curves = 0;
+		for (auto i = 0; i != source.elementCount(); ++i) {
+			if (source.elementAt(i).isCurveTo()) ++curves;
+		}
+		Expects(curves == 0 || curves == 4 || curves == 12);
+		const auto point = [&](int i) {
+			const auto element = source.elementAt(i);
+			return QPointF(element.x, element.y);
+		};
+		const auto put = [&](int i, QPointF point) {
+			result.setElementPositionAt(i, point.x(), point.y());
+		};
+		auto at = 1;
+		auto current = point(0);
+		for (auto corner = 0; corner != 4; ++corner) {
+			if (corner && source.elementAt(at).isLineTo()) current = point(at++);
+			put(corner * 10, current);
+			if (!curves) {
+				for (auto i = 1; i != 10; ++i) put(corner * 10 + i, current);
+			} else if (curves == 4) {
+				for (auto i = 1; i != 4; ++i) put(corner * 10 + i, current);
+				for (auto i = 4; i != 7; ++i) put(corner * 10 + i, point(at++));
+				current = point(at - 1);
+				for (auto i = 7; i != 10; ++i) put(corner * 10 + i, current);
+			} else {
+				for (auto i = 1; i != 10; ++i) put(corner * 10 + i, point(at++));
+				current = point(at - 1);
+			}
+		}
+		put(40, point(0));
+		return result;
+	}
+
+	QRectF _rect;
+	QRectF _fromRect;
+	QRectF _toRect;
+	QPainterPath _path;
+	QPainterPath _fromPath;
+	QPainterPath _toPath;
+	double _expanded = 0.;
+	double _fromExpanded = 0.;
+	double _toExpanded = 0.;
+};
+
 class FullscreenPlayer final : public Ui::RpWidget {
 public:
 	FullscreenPlayer(
@@ -6981,6 +7119,7 @@ public:
 	, _queueToggle(Ui::CreateChild<RoundGlyph>(_playbackBar, Glyph::Queue, 44))
 	, _volume(Ui::CreateChild<VolumeControl>(_playbackBar))
 	, _tabTransition(Ui::CreateChild<Ui::RpWidget>(this))
+	, _coverOverlay(Ui::CreateChild<Ui::RpWidget>(this))
 	, _tab(openHome ? Tab::Home : Tab::Now)
 	, _shuffle(Ui::CreateChild<RoundGlyph>(_playbackBar, Glyph::Shuffle, 44))
 	, _previous(Ui::CreateChild<RoundGlyph>(_playbackBar, Glyph::Previous, 52))
@@ -7156,6 +7295,12 @@ public:
 				paintPlaybackBarBackground(p, layout);
 				paintPlaybackBarDetails(p, layout);
 			}
+		});
+		_coverOverlay->setAttribute(Qt::WA_TransparentForMouseEvents);
+		_coverOverlay->hide();
+		_coverOverlay->paintOn([=](QPainter &p) {
+			const auto hq = PainterHighQualityEnabler(p);
+			paintFullscreenCover(p, computeLayout());
 		});
 		_tabTransition->setAttribute(Qt::WA_TransparentForMouseEvents);
 		_tabTransition->hide();
@@ -7399,26 +7544,18 @@ public:
 		CoversChanged() | rpl::on_next([=] { refresh(); }, lifetime());
 		RecentChanged() | rpl::on_next([=] {
 			if (_tab == Tab::Home && !_homeSection && !_homeAlbumOpen) {
-				crl::on_main(this, [=] {
-					if (_tab == Tab::Home && !_homeSection && !_homeAlbumOpen) {
-						rebuildTab();
-					}
-				});
+				scheduleTabRebuild();
 			}
 		}, lifetime());
 		PlaylistsChanged() | rpl::on_next([=] {
 			if (_tab == Tab::Playlists || (_tab == Tab::Home && _homeArtistOpen)) {
-				QTimer::singleShot(0, this, [=] {
-					if (_tab == Tab::Playlists || (_tab == Tab::Home && _homeArtistOpen)) {
-						rebuildTab();
-					}
-				});
+				scheduleTabRebuild();
 			}
 		}, lifetime());
 		LikesChanged() | rpl::on_next([=] {
 			refresh();
 			if (_tab == Tab::Library || _tab == Tab::Home) {
-				rebuildTab();
+				scheduleTabRebuild();
 			}
 		}, lifetime());
 		MotionChanges() | rpl::on_next([=] {
@@ -7489,6 +7626,13 @@ public:
 			if (PowerSaving::On(PowerSaving::kAnimations) && _barSlide.animating()) {
 				_barSlide.stop();
 				layoutPlaybackBar(computeLayout());
+			}
+			if (PowerSaving::On(PowerSaving::kAnimations) && _coverMorph.animating()) {
+				_coverMorph.stop();
+				_coverOverlay->hide();
+				if (!_coverExpanding) setTab(Tab::Home);
+				_plainAnim.stop();
+				_playbackBar->update();
 			}
 			updateAmbientTimer();
 			repaintBackdrop();
@@ -7570,11 +7714,13 @@ public:
 protected:
 	void showEvent(QShowEvent *event) override {
 		RpWidget::showEvent(event);
+		_canvas.setVisible(true);
 		updateAmbientTimer();
 	}
 	void hideEvent(QHideEvent *event) override {
 		_searchHintMenu.hide();
 		_ambientTimer.stop();
+		_canvas.setVisible(false);
 		_preparedBackdrop = QImage();
 		RpWidget::hideEvent(event);
 	}
@@ -7639,27 +7785,10 @@ protected:
 		}
 		if (hover == InfoHover::Cover) {
 			setHover(InfoHover::None);
-			const auto layout = computeLayout();
-			if (layout.barCover.isEmpty() || anim::Disabled()
-				|| PowerSaving::On(PowerSaving::kAnimations)) {
-				setTab(Tab::Home);
-			} else if (!_coverClosing.animating()) {
-				_coverClosing.start([=] {
-					update();
-					if (!_coverClosing.animating() && _tab == Tab::Now) {
-						setTab(Tab::Home);
-						_plainAnim.stop();
-						auto effect = new QGraphicsOpacityEffect(_tabScroll);
-						effect->setOpacity(0.);
-						_tabScroll->setGraphicsEffect(effect);
-						_homeEntrance.start([=] {
-							effect->setOpacity(_homeEntrance.value(1.));
-							if (!_homeEntrance.animating()) {
-								_tabScroll->setGraphicsEffect(nullptr);
-							}
-						}, 0., 1., kSwitchDuration, anim::easeOutCubic);
-					}
-				}, 0., 1., 200, anim::easeOutQuint);
+			if (_coverMorph.animating()) {
+				startCoverTransition(!_coverExpanding);
+			} else {
+				startCoverTransition(false);
 			}
 			return;
 		}
@@ -7934,8 +8063,8 @@ protected:
 	}
 	[[nodiscard]] QRect barInfoRect(const Layout &layout) const {
 		const auto s = [](int v) { return style::ConvertScale(v); };
-		const auto shown = _coverClosing.animating()
-			? 1.
+		const auto shown = _coverMorph.animating()
+			? 1. - _coverTransition.expanded()
 			: _plainAnim.value(_tab == Tab::Now ? 0. : 1.);
 		const auto shift = int((s(kBarCover) + s(14)) * (1. - shown));
 		return layout.barInfo.adjusted(-shift, 0, 0, 0);
@@ -7944,6 +8073,9 @@ protected:
 	[[nodiscard]] InfoHover infoAt(QPoint point) const {
 		const auto s = [](int v) { return style::ConvertScale(v); };
 		const auto layout = computeLayout();
+		if (_coverMorph.animating() && _coverTransition.rect().contains(point)) {
+			return InfoHover::Cover;
+		}
 		const auto available = infoAvailable(layout);
 		const auto textWidth = [&](const QFont &font, const QString &text) {
 			return std::min(QFontMetrics(font).horizontalAdvance(text), available);
@@ -8124,6 +8256,10 @@ protected:
 		}
 		RpWidget::resizeEvent(e);
 		scheduleHomeMoreIfNeeded();
+		_coverOverlay->setGeometry(rect());
+		if (e->size() != e->oldSize() && _coverMorph.animating()) {
+			startCoverTransition(_coverExpanding);
+		}
 	}
 
 	void relayout() {
@@ -8596,12 +8732,74 @@ protected:
 		}
 	}
 
-	// Клик по маленькой обложке внизу: большая вырастает из неё на «Сейчас играет», маленькая гаснет.
+	[[nodiscard]] QRectF expandedCoverRect(const Layout &layout) const {
+		const auto scale = 0.94 + 0.06 * _playAnim.value(_isPlaying ? 1. : 0.);
+		const auto rect = QRectF(layout.cover);
+		const auto size = rect.size() * scale;
+		return QRectF(rect.center() - QPointF(size.width(), size.height()) / 2., size);
+	}
+	[[nodiscard]] double barCoverRadius(const Layout &layout) const {
+		return style::ConvertScale(kBarRadius) - (layout.barCover.y() - layout.bar.y());
+	}
+	void startCoverTransition(bool expanding) {
+		const auto layout = computeLayout();
+		if (layout.cover.isEmpty() || layout.barCover.isEmpty()
+			|| anim::Disabled() || PowerSaving::On(PowerSaving::kAnimations)) {
+			_coverMorph.stop();
+			_coverOverlay->hide();
+			if (!expanding) setTab(Tab::Home);
+			update();
+			return;
+		}
+		const auto scale = 0.94 + 0.06 * _playAnim.value(_isPlaying ? 1. : 0.);
+		if (!_coverMorph.animating()) {
+			_coverTransition.reset(
+				expanding ? QRectF(layout.barCover) : expandedCoverRect(layout),
+				expanding ? barCoverRadius(layout) : style::ConvertScale(22) * scale,
+				expanding ? 0.6 : 0., expanding ? 0. : 1.);
+		}
+		_coverExpanding = expanding;
+		_coverTransition.retarget(
+			expanding ? expandedCoverRect(layout) : QRectF(layout.barCover),
+			expanding ? style::ConvertScale(22) * scale : barCoverRadius(layout),
+			expanding ? 0. : 0.6, expanding ? 1. : 0.);
+		_coverMorph.stop();
+		_coverMorph.start([=](double progress) {
+			_coverTransition.update(progress);
+			update();
+			if (_coverMorph.animating()) {
+				_coverOverlay->update();
+			} else {
+				_coverOverlay->hide();
+			}
+			if (!_coverMorph.animating() && !_coverExpanding && _tab == Tab::Now) {
+				setTab(Tab::Home);
+				_plainAnim.stop();
+				_playbackBar->update();
+				if (_tab == Tab::Home && !anim::Disabled()
+					&& !PowerSaving::On(PowerSaving::kAnimations)) {
+					auto effect = new QGraphicsOpacityEffect(_tabScroll);
+					effect->setOpacity(0.);
+					_tabScroll->setGraphicsEffect(effect);
+					_homeEntrance.start([=] {
+						effect->setOpacity(_homeEntrance.value(1.));
+						if (!_homeEntrance.animating()) {
+							_tabScroll->setGraphicsEffect(nullptr);
+						}
+					}, 0., 1., kSwitchDuration, anim::easeOutCubic);
+				}
+			}
+		}, 0., 1., 240, anim::sineInOut);
+		if (_coverMorph.animating()) {
+			_coverOverlay->setGeometry(rect());
+			_coverOverlay->show();
+			_coverOverlay->raise();
+		}
+	}
 	void openNowPlayingFromBar() {
-		_morphFrom = computeLayout().barCover;
 		setTab(Tab::Now);
 		setHover(InfoHover::None);
-		_coverMorph.start([=] { update(); }, 0., 1., 360, anim::easeOutCubic);
+		startCoverTransition(true);
 	}
 	void animateHomeBackExit() {
 		if (!_homeBack->isVisible() || anim::Disabled()
@@ -8651,6 +8849,15 @@ protected:
 		++_homeAlbumGeneration;
 	}
 	void setTab(Tab tab) {
+		if (_coverMorph.animating()) {
+			if (tab == Tab::Now) {
+				startCoverTransition(true);
+				return;
+			}
+			// Other navigation still takes effect synchronously for its callers.
+			_coverMorph.stop();
+			_coverOverlay->hide();
+		}
 		if (_tab == tab) {
 			if (tab == Tab::Library) {
 				syncLibrary();
@@ -8681,16 +8888,20 @@ protected:
 		_tabTransitionNow = QPixmap();
 		_homeEntrance.stop();
 		_tabScroll->setGraphicsEffect(nullptr);
-		_coverClosing.stop();
-		_plainAnim.start(
-			[this] {
-				update();
-				_queuePanel->update();
-			},
-			_tab == Tab::Now ? 0. : 1.,
-			tab == Tab::Now ? 0. : 1.,
-			220,
-			anim::easeOutCubic);
+		const auto plainFrom = _plainAnim.value(_tab == Tab::Now ? 0. : 1.);
+		_plainAnim.stop();
+		if (!anim::Disabled() && !PowerSaving::On(PowerSaving::kAnimations)) {
+			_plainAnim.start(
+				[this] {
+					update();
+					_playbackBar->update();
+					_queuePanel->update();
+				},
+				plainFrom,
+				tab == Tab::Now ? 0. : 1.,
+				220,
+				anim::easeOutCubic);
+		}
 		const auto navFrom = _navSlide.value(float64(int(_tab)));
 		_navSlideFrom = navFrom;
 		_tab = tab;
@@ -8775,7 +8986,7 @@ protected:
 				_controller->showToast(error);
 			}
 			if (_tab == Tab::Playlists) {
-				rebuildTab();
+				scheduleTabRebuild();
 			}
 		}));
 	}
@@ -9342,7 +9553,20 @@ protected:
 		return QRect(layout.center.center().x() - width / 2, top, width, height);
 	}
 
+	void scheduleTabRebuild() {
+		if (_tabRebuildPending) {
+			return;
+		}
+		_tabRebuildPending = true;
+		crl::on_main(this, [=] {
+			if (std::exchange(_tabRebuildPending, false) && !_closing) {
+				rebuildTab();
+			}
+		});
+	}
+
 	void rebuildTab() {
+		_tabRebuildPending = false;
 		_rebuildingTab = true;
 		const auto rebuildingGuard = gsl::finally([&] { _rebuildingTab = false; });
 		const auto keep = (_rebuiltTab == _tab) ? _tabScroll->scrollTop() : 0;
@@ -9922,7 +10146,8 @@ protected:
 	}
 	void refreshQueueViews() {
 		if (showsQueue()) {
-			rebuildTab();
+			fillTabQueue();
+			update();
 		}
 		if (_queuePanelOpen) {
 			refreshQueuePanel();
@@ -9930,6 +10155,7 @@ protected:
 	}
 
 	void fillTabQueue() {
+		_tabNote.clear();
 		fillQueue(_tabList, _tabScroll, _tabContent);
 		if (_tabList->count() == 0) {
 			_tabNote = QString::fromUtf8(Mokagram::Lang::Tr("Очередь пуста."));
@@ -9937,7 +10163,6 @@ protected:
 	}
 
 	void refreshQueuePanel() {
-		_queueList->clear();
 		fillQueue(_queueList, _queueScroll, _queueList);
 		_queuePanel->update();
 	}
@@ -9970,13 +10195,24 @@ protected:
 				}
 			}
 		}
+		const auto mode = inQueue ? RowMode::Queue : RowMode::Context;
 		for (auto i = 0; i != int(tracks.size()); ++i) {
-			list->add(object_ptr<Row>(
+			if (i < list->count()) {
+				const auto row = dynamic_cast<Row*>(list->widgetAt(i).get());
+				if (row && row->matchesQueueTrack(tracks[i], mode)) {
+					continue;
+				}
+				delete list->widgetAt(i).get();
+			}
+			list->insert(i, object_ptr<Row>(
 				list,
 				_controller,
 				tracks[i],
 				i,
-				inQueue ? RowMode::Queue : RowMode::Context));
+				mode));
+		}
+		while (list->count() > int(tracks.size())) {
+			delete list->widgetAt(list->count() - 1).get();
 		}
 		content->resizeToWidth(scroll->width());
 		auto at = inQueue ? queue.index : -1;
@@ -10139,97 +10375,92 @@ protected:
 		}
 
 		// Обложка: сжимается на паузе, при смене трека плавно перетекает в новую.
-		const auto playing = _playAnim.value(_isPlaying ? 1. : 0.);
-		const auto scale = 0.94 + 0.06 * playing;
+		if (layout.barShown && _tab != Tab::Home) {
+			paintPlaybackBarBackground(p, layout);
+		}
+		if (!_coverMorph.animating()
+			&& e->region().intersects(expandedCoverRect(layout).toAlignedRect())) {
+			paintFullscreenCover(p, layout);
+		}
+		if (!layout.barShown || _tab == Tab::Home) {
+			return;
+		}
+
+		paintPlaybackBarDetails(p, layout);
+	}
+
+	void paintFullscreenCover(QPainter &p, const Layout &layout) {
+		const auto s = [](int v) { return style::ConvertScale(v); };
 		const auto fade = _infoFade.value(1.);
-		const auto morph = _coverMorph.animating() ? _coverMorph.value(1.) : 1.;
-		const auto coverRect = [&] {
-			const auto to = QRectF(layout.cover);
-			if (morph >= 1. || _morphFrom.isEmpty()) {
-				return to;
-			}
-			const auto from = QRectF(_morphFrom);
-			return QRectF(
-				from.x() + (to.x() - from.x()) * morph,
-				from.y() + (to.y() - from.y()) * morph,
-				from.width() + (to.width() - from.width()) * morph,
-				from.height() + (to.height() - from.height()) * morph);
-		}();
-		const auto coverRadius = s(10) + (s(22) - s(10)) * morph;
+		const auto flying = _coverMorph.animating();
+		const auto expanded = flying ? _coverTransition.expanded() : 1.;
+		const auto coverRect = flying ? _coverTransition.rect() : expandedCoverRect(layout);
+		auto rounded = QPainterPath();
+		if (!flying && !coverRect.isEmpty()) {
+			rounded = Ui::SquirclePath(coverRect, style::ConvertScale(22)
+				* (0.94 + 0.06 * _playAnim.value(_isPlaying ? 1. : 0.)), 0.);
+		}
+		const auto &coverPath = flying ? _coverTransition.path() : rounded;
 		const auto drawCover = [&](const QPixmap &pixmap, double opacity, bool current) {
-			if (opacity <= 0. || layout.cover.isEmpty()) {
+			if (opacity <= 0. || coverRect.isEmpty()) {
 				return;
 			}
 			p.save();
 			p.setOpacity(opacity);
-			p.translate(coverRect.center());
-			p.scale(scale, scale);
-			p.translate(-coverRect.center());
-			auto path = QPainterPath();
-			path.addRoundedRect(coverRect, coverRadius, coverRadius);
-			p.setClipPath(path);
-			auto frame = current ? motionFrame(_spotifyCanvas, layout.cover.size()) : QImage();
-			if (current) _spotifyPaletteFrame = frame;
-			if (!frame.isNull()) {
-				p.drawImage(layout.cover, frame);
-				p.restore();
-				return;
-			}
-			const auto canvas = current && _canvas.paint(p, layout.cover);
-			if (canvas) {
-				p.restore();
-				return;
-			}
-			if (current) frame = motionFrame(_motionCover, layout.cover.size());
-			if (!frame.isNull()) {
-				p.drawImage(layout.cover, frame);
-			} else if (pixmap.isNull()) {
-				p.fillRect(coverRect, QColor(0x23, 0x23, 0x25));
-				st::menuIconSoundOn.paintInCenter(p, layout.cover, QColor(0xa1, 0xa1, 0xa6));
+			p.setClipPath(coverPath, Qt::IntersectClip);
+			if (pixmap.isNull()) {
+				p.fillRect(coverRect, anim::color(QColor(0x32, 0x32, 0x32),
+					QColor(0x23, 0x23, 0x25), expanded));
 			} else {
-				const auto scaled = pixmap.size().scaled(
-					layout.cover.size(),
-					Qt::KeepAspectRatioByExpanding);
-				p.drawPixmap(QRect(
-					layout.cover.center() - QPoint(scaled.width(), scaled.height()) / 2,
-					scaled), pixmap);
+				p.drawPixmap(coverRect, pixmap, CoverSourceRect(pixmap.size(), coverRect.size()));
+			}
+			if (current && expanded > 0.) {
+				p.setOpacity(opacity * expanded);
+				auto frame = motionFrame(_spotifyCanvas, layout.cover.size());
+				_spotifyPaletteFrame = frame;
+				if (!frame.isNull()) {
+					p.drawImage(coverRect, frame, CoverSourceRect(frame.size(), coverRect.size()));
+				} else {
+					// Canvas takes integer coordinates; keep the screen-space clip and rect fractional.
+					const auto area = QRect(QPoint(), coverRect.size().toSize().expandedTo(QSize(1, 1)));
+					p.save();
+					p.translate(coverRect.topLeft());
+					p.scale(coverRect.width() / area.width(), coverRect.height() / area.height());
+					const auto canvas = _canvas.paint(p, area);
+					p.restore();
+					if (!canvas) {
+						frame = motionFrame(_motionCover, layout.cover.size());
+						if (!frame.isNull()) {
+							p.drawImage(coverRect, frame, CoverSourceRect(frame.size(), coverRect.size()));
+						} else if (pixmap.isNull()) {
+							st::menuIconSoundOn.paintInCenter(p, coverRect.toAlignedRect(), QColor(0xa1, 0xa1, 0xa6));
+						}
+					}
+				}
 			}
 			p.restore();
 		};
-		p.save();
-		const auto closing = _coverClosing.value(0.);
-		if (closing > 0. && !layout.cover.isEmpty()) {
-			const auto target = QRectF(layout.barCover);
-			const auto source = QRectF(layout.cover);
-			const auto x = source.x() + (target.x() - source.x()) * closing;
-			const auto y = source.y() + (target.y() - source.y()) * closing;
-			const auto w = source.width() + (target.width() - source.width()) * closing;
-			const auto h = source.height() + (target.height() - source.height()) * closing;
-			p.translate(x, y);
-			p.scale(w / source.width(), h / source.height());
-			p.translate(-source.x(), -source.y());
-		}
 		drawCover(_coverWas, 1. - fade, false);
 		drawCover(_cover, fade, true);
 		p.save();
-		p.translate(coverRect.center());
-		p.scale(scale, scale);
-		p.translate(-coverRect.center());
-		auto cardPath = QPainterPath();
-		cardPath.addRoundedRect(coverRect, coverRadius, coverRadius);
-		p.setClipPath(cardPath);
+		p.setClipPath(coverPath, Qt::IntersectClip);
+		p.setOpacity(expanded);
 		auto shade = QLinearGradient(coverRect.topLeft(), coverRect.bottomLeft());
 		shade.setColorAt(0., QColor(0, 0, 0, 20));
 		shade.setColorAt(0.5, QColor(0, 0, 0, 0));
 		shade.setColorAt(0.72, QColor(0, 0, 0, 80));
 		shade.setColorAt(1., QColor(0, 0, 0, 230));
 		p.fillRect(coverRect, shade);
-		_canvas.paintLoading(p, QRect(
-			layout.cover.x() + s(24),
-			layout.cover.y() + s(16),
-			std::max(layout.cover.width() - s(48), 0),
-			s(4)), _accent);
-		p.restore();
+		if (!layout.cover.isEmpty()) {
+			p.translate(coverRect.topLeft());
+			p.scale(coverRect.width() / layout.cover.width(), coverRect.height() / layout.cover.height());
+			p.translate(-layout.cover.topLeft());
+			_canvas.paintLoading(p, QRect(
+				layout.cover.x() + s(24),
+				layout.cover.y() + s(16),
+				std::max(layout.cover.width() - s(48), 0),
+				s(4)), _accent);
+		}
 
 		// Название и исполнитель; под курсором подчёркнуты и ведут на их страницы.
 		const auto available = infoAvailable(layout);
@@ -10260,31 +10491,8 @@ protected:
 				QFontMetrics(font).elidedText(artist, Qt::ElideRight, available));
 		};
 		drawInfo(_wasTitle, _wasArtist, 1. - fade, false);
-		drawInfo(_title, _artist, fade * (1. - closing), true);
+		drawInfo(_title, _artist, fade, true);
 		p.restore();
-		if (!layout.barShown || _tab == Tab::Home) {
-			return;
-		}
-
-		paintPlaybackBarBackground(p, layout);
-		if (closing > 0. && !layout.cover.isEmpty()) {
-			const auto source = QRectF(layout.cover);
-			const auto target = QRectF(layout.barCover);
-			p.save();
-			// Обложка летит в бар уже со скруглением бара, а не квадратом.
-			p.setClipPath(Ui::SquirclePath(
-				QRectF(layout.barCover),
-				s(kBarRadius) - (layout.barCover.y() - layout.bar.y())));
-			p.translate(source.x() + (target.x() - source.x()) * closing,
-				source.y() + (target.y() - source.y()) * closing);
-			p.scale((source.width() + (target.width() - source.width()) * closing) / source.width(),
-				(source.height() + (target.height() - source.height()) * closing) / source.height());
-			p.translate(-source.x(), -source.y());
-			drawCover(_coverWas, 1. - fade, false);
-			drawCover(_cover, fade, true);
-			p.restore();
-		}
-		paintPlaybackBarDetails(p, layout);
 	}
 
 	[[nodiscard]] static QFont labelFont(int size, bool bold) {
@@ -10310,20 +10518,21 @@ protected:
 	void paintPlaybackBarDetails(QPainter &p, const Layout &layout) const {
 		const auto s = [](int v) { return style::ConvertScale(v); };
 		// На «Сейчас играет» обложки в капсуле нет: там большая.
-		const auto plain = _plainAnim.value(_tab == Tab::Now ? 0. : 1.);
-		if (!layout.ultra && plain > 0.) {
+		const auto fade = _infoFade.value(1.);
+		if (!layout.ultra && _tab != Tab::Now) {
 			p.save();
-			p.setOpacity(plain);
-			auto path = QPainterPath();
-			path = Ui::SquirclePath(
-				QRectF(layout.barCover),
-				s(kBarRadius) - (layout.barCover.y() - layout.bar.y()));
-			p.setClipPath(path);
-			if (_cover.isNull()) {
-				p.fillRect(layout.barCover, QColor(0x32, 0x32, 0x32));
-			} else {
-				p.drawPixmap(layout.barCover, _cover);
-			}
+			p.setClipPath(Ui::SquirclePath(QRectF(layout.barCover), barCoverRadius(layout)), Qt::IntersectClip);
+			const auto draw = [&](const QPixmap &pixmap, double opacity) {
+				p.setOpacity(opacity);
+				if (pixmap.isNull()) {
+					p.fillRect(layout.barCover, QColor(0x32, 0x32, 0x32));
+				} else {
+					p.drawPixmap(QRectF(layout.barCover), pixmap,
+						CoverSourceRect(pixmap.size(), layout.barCover.size()));
+				}
+			};
+			draw(_coverWas, 1. - fade);
+			draw(_cover, fade);
 			p.restore();
 		}
 		if (!layout.ultra && !layout.compact && layout.barInfo.width() > 0) {
@@ -10382,7 +10591,6 @@ private:
 				target->setBad();
 			}
 			if (_tab == Tab::Now) {
-				_view->update();
 				update(computeLayout().cover);
 			}
 		});
@@ -10504,10 +10712,12 @@ private:
 		const auto extent = style::ConvertScale(256);
 		const auto rasterSize = size().scaled(
 			QSize(extent, extent), Qt::KeepAspectRatio);
-		auto background = QImage(rasterSize, QImage::Format_RGBA64_Premultiplied);
-		background.fill(QColor(0x14, 0x14, 0x15));
+		if (_backdropRaster.size() != rasterSize) {
+			_backdropRaster = QImage(rasterSize, QImage::Format_RGBA64_Premultiplied);
+		}
+		_backdropRaster.fill(QColor(0x14, 0x14, 0x15));
 		{
-			auto raster = QPainter(&background);
+			auto raster = QPainter(&_backdropRaster);
 			auto hq = PainterHighQualityEnabler(raster);
 			raster.scale(
 				rasterSize.width() / double(width()),
@@ -10534,7 +10744,7 @@ private:
 		auto p = QPainter(&_preparedBackdrop);
 		p.setRenderHint(QPainter::SmoothPixmapTransform);
 		const auto area = QRectF(QPointF(), _preparedBackdrop.deviceIndependentSize());
-		p.drawImage(area, background);
+		p.drawImage(area, _backdropRaster);
 		p.fillRect(area, grain);
 	}
 
@@ -10776,6 +10986,7 @@ private:
 	const not_null<RoundGlyph*> _queueToggle;
 	const not_null<VolumeControl*> _volume;
 	const not_null<Ui::RpWidget*> _tabTransition;
+	const not_null<Ui::RpWidget*> _coverOverlay;
 	// Цвет фона страницы на высоте y: плоский или градиент тонировки альбома.
 	[[nodiscard]] QColor pageBackgroundAt(int y) const {
 		const auto base = QColor(0x1c, 0x1c, 0x1c);
@@ -10903,6 +11114,7 @@ private:
 	bool _homeMoreLoading = false;
 	bool _homeMoreCheckQueued = false;
 	bool _rebuildingTab = false;
+	bool _tabRebuildPending = false;
 	bool _homeLoading = false;
 	bool _homeLoaded = false;
 	bool _homeSoundCloudLoading = false;
@@ -10928,6 +11140,7 @@ private:
 	QString _canvasPaletteFor;
 	crl::time _canvasPaletteNext = 0;
 	QImage _preparedBackdrop;
+	QImage _backdropRaster;
 	bool _backdropDirty = true;
 	crl::time _animatedBackdropFrame = -1;
 	[[nodiscard]] bool animatesBackdrop() const {
@@ -10961,8 +11174,8 @@ private:
 	Ui::Animations::Simple _fade;
 	Ui::Animations::Simple _playAnim;
 	Ui::Animations::Simple _coverMorph;
-	Ui::Animations::Simple _coverClosing;
-	QRect _morphFrom;
+	CoverTransition _coverTransition;
+	bool _coverExpanding = false;
 	Ui::Animations::Simple _plainAnim;
 	Ui::Animations::Simple _barAnim;
 	QColor _barFrom = QColor(0x28, 0x28, 0x28);

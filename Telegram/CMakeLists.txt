@@ -99,6 +99,8 @@ PRIVATE
     mokagram/pet/mokagram_pet.cpp
     mokagram/pet/mokagram_pet.h
     mokagram/quote/mokagram_quote.cpp
+    mokagram/quote/mokagram_frame.cpp
+    mokagram/quote/mokagram_frame.h
     mokagram/avatar/mokagram_avatar_shape.cpp
     mokagram/commands/mokagram_commands.cpp
     mokagram/commands/mokagram_commands.h

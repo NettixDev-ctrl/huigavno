@@ -830,6 +830,53 @@ def download_media(peer, msg_id, path, callback=None):
     return True if res.get('ok') else None
 
 
+def render_message(peer, msg_id, path, callback, ramka=False):
+    """Render a loaded message to PNG, optionally in the golden Ramka frame.
+    Requires messages.read. callback({'path': absolute_path}, None) on success,
+    callback(None, error) on failure. Paths follow download_media restrictions."""
+    if not callable(callback):
+        return None
+    peer, msg, ok = _ids(peer, msg_id)
+    entry = _gate('render_message', 'messages.read', peer)
+    if entry is None:
+        callback(None, 'Permission denied or action limit reached.')
+        return None
+    if not ok or not isinstance(path, str) or not path:
+        callback(None, 'Invalid peer, message id or output path.')
+        return None
+    path = os.path.abspath(path)
+    if not _path_ok(entry, path):
+        _h['audit'](entry, 'render_message', peer, 'denied')
+        callback(None, 'Output path is outside permitted directories.')
+        return None
+    if not _limit(entry, 'render_message', 10, 60):
+        _h['audit'](entry, 'render_message', peer, 'rate_limit')
+        callback(None, 'Screenshot limit reached (10 per minute).')
+        return None
+    lock = threading.Lock()
+    completed = False
+
+    def done(payload):
+        nonlocal completed
+        with lock:
+            if completed:
+                return
+            completed = True
+        if payload.get('ok'):
+            callback({'path': payload['path']}, None)
+        else:
+            callback(None, payload.get('error') or 'Screenshot failed.')
+
+    token = _h['register_cb'](entry, done, True)
+    res = _native('render_message', {
+        'token': token, 'peer': peer, 'id': msg, 'path': path, 'ramka': bool(ramka)})
+    _h['audit'](entry, 'render_message', peer, 'allowed' if res.get('ok') else 'failed')
+    if not res.get('ok'):
+        entry.get('cbs', {}).pop(token, None)
+        done(res)
+    return True if res.get('ok') else None
+
+
 def press_button(peer, msg_id, button, callback=None):
     """Нажать инлайн-кнопку бота из message['buttons']: callback(ответ, ошибка). Право tl.write (это действие от вашего имени)."""
     peer, msg, ok = _ids(peer, msg_id)

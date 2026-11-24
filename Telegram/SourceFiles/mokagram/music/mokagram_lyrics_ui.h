@@ -72,6 +72,10 @@ private:
 	[[nodiscard]] int lineAt(int y);
 	void updateTimer();
 	void reset();
+	void invalidateLayouts();
+	void ensureLinePositions(int count);
+	[[nodiscard]] double topOf(int index);
+	[[nodiscard]] int lineAtOffset(double y);
 
 	[[nodiscard]] qint64 livePosition() const;
 	void tick();
@@ -102,10 +106,12 @@ private:
 	QTimer _timer;
 	QElapsedTimer _clock;
 	std::vector<int> _heights;
+	std::vector<double> _lineTops;
 	std::vector<std::unique_ptr<QTextLayout>> _layouts;
 	CoverBackground _backdrop;
 	Fn<void(QPainter&, QRect)> _background;
 	std::vector<float> _weights;
+	std::vector<int> _fadingWeights;
 	double _fill = 0.;
 	qint64 _position = 0;
 	qint64 _positionAt = 0;

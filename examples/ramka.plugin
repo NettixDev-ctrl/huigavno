@@ -1,0 +1,71 @@
+__id__ = "ramka"
+__name__ = "Ramka"
+__description__ = "Send a screenshot of a replied message in an ornate golden frame."
+__author__ = "mokagram"
+__version__ = "1.0"
+__permissions__ = ["messages.read", "messages.send", "ui", "files"]
+
+import os
+import tempfile
+
+from base_plugin import BasePlugin, command
+from mokagram_sdk import api
+
+
+class Ramka(BasePlugin):
+    strings = {
+        "en": {
+            "usage": "Send {0}ramka as a reply to a message, without arguments.",
+            "failed": "Could not create the framed screenshot. Check permissions and try again.",
+            "send_failed": "Could not send the framed screenshot. Check send permissions and limits.",
+        },
+        "ru": {
+            "usage": "Отправьте {0}ramka ответом на сообщение, без аргументов.",
+            "failed": "Не удалось создать скриншот в рамке. Проверьте права и попробуйте снова.",
+            "send_failed": "Не удалось отправить скриншот в рамке. Проверьте права отправки и лимиты.",
+        },
+    }
+
+    @command("ramka", "Reply to a message to send its screenshot in a golden frame.")
+    def ramka(self, ctx):
+        if not ctx.reply_to or str(ctx.reply_to) == "0" or ctx.args:
+            api.show_toast(self.s("usage", ctx.prefix))
+            return
+
+        try:
+            with tempfile.NamedTemporaryFile(prefix="moka_ramka_", suffix=".png", delete=False) as output:
+                path = output.name
+        except OSError:
+            self.logger.exception("Ramka temporary file")
+            api.show_toast(self.s("failed"))
+            return
+
+        def cleanup():
+            try:
+                os.remove(path)
+            except FileNotFoundError:
+                pass
+            except OSError:
+                self.logger.exception("Ramka temporary file cleanup")
+
+        def rendered(result, error):
+            try:
+                if error or not result:
+                    self.logger.warning("Ramka render: %s", error)
+                    api.show_toast(self.s("failed"))
+                    return
+                # Static as_photo sends own their pixels before returning.
+                if not api.send_file(ctx.peer, result["path"], as_photo=True):
+                    api.show_toast(self.s("send_failed"))
+            except Exception:
+                self.logger.exception("Ramka screenshot send")
+                api.show_toast(self.s("failed"))
+            finally:
+                cleanup()
+
+        try:
+            api.render_message(ctx.peer, ctx.reply_to, path, rendered, ramka=True)
+        except Exception:
+            cleanup()
+            self.logger.exception("Ramka screenshot render")
+            api.show_toast(self.s("failed"))

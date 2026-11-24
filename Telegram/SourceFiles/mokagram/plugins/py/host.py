@@ -115,7 +115,7 @@ def _moka_parse(source):
                     record('tl.write', node, name)
                 if f.attr in ('forward_messages', 'react', 'send_album', 'schedule_message', 'save_draft'):
                     record('messages.send', node, name)
-                if f.attr in ('get_participants', 'search_messages', 'get_history_remote', 'input_peer', 'get_user', 'download_media'):
+                if f.attr in ('get_participants', 'search_messages', 'get_history_remote', 'input_peer', 'get_user', 'download_media', 'render_message'):
                     record('messages.read', node, name)
                 if f.attr in ('delete_messages', 'delete_message'):
                     record('messages.delete', node, name)

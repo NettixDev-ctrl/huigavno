@@ -15,6 +15,7 @@ public:
 	~CanvasPlayer();
 
 	void refresh(QString id, QString title, QString artist, bool playing);
+	void setVisible(bool visible);
 	[[nodiscard]] QImage frame();
 	[[nodiscard]] bool paint(QPainter &p, QRect area);
 	void paintLoading(QPainter &p, QRect area, QColor color);
@@ -46,6 +47,7 @@ private:
 	int _pages = 0;
 	QUrl _nextPage;
 	bool _playing = false;
+	bool _visible = false;
 	bool _loading = false;
 	float64 _loadingProgress = -1.;
 	Ui::Animations::Basic _loadingAnimation;

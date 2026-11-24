@@ -889,23 +889,24 @@ void FinishImageRequest(const QString &url, QImage image) {
 }
 
 void LoadImageAttempt(const QString &url, int attempt) {
-	++ActiveImageRequests();
+	if (attempt == 0) ++ActiveImageRequests();
 	const auto reply = Get(QUrl(url), kMaxImageBytes, QString(), 5000);
 	QObject::connect(reply, &QNetworkReply::finished, [=] {
-		const auto bytes = reply->readAll();
-		auto image = QImage::fromData(bytes);
+		auto bytes = reply->readAll();
 		reply->deleteLater();
-		if (image.isNull() && attempt == 0) {
-			// Освобождаем слот перед повтором: retry сам его займёт заново.
-			// Иначе после нескольких неудач StartQueuedImageLoads встанет и
-			// остальные обложки никогда не начнут грузиться.
-			ActiveImageRequests() = std::max(ActiveImageRequests() - 1, 0);
-			QTimer::singleShot(400, QCoreApplication::instance(), [=] {
-				LoadImageAttempt(url, 1);
+		// A slot covers the network request, decoding and any delayed retry.
+		crl::async([url, attempt, bytes = std::move(bytes)] {
+			auto image = QImage::fromData(bytes);
+			crl::on_main([url, attempt, image = std::move(image)]() mutable {
+				if (image.isNull() && attempt == 0) {
+					QTimer::singleShot(400, QCoreApplication::instance(), [url] {
+						LoadImageAttempt(url, 1);
+					});
+					return;
+				}
+				FinishImageRequest(url, std::move(image));
 			});
-			return;
-		}
-		FinishImageRequest(url, std::move(image));
+		});
 	});
 }
 

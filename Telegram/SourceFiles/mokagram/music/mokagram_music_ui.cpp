@@ -57,6 +57,7 @@
 #include "history/history.h"
 #include "history/history_item.h"
 #include "history/view/history_view_element.h"
+#include "lang/lang_keys.h"
 #include "lang/lang_tag.h"
 #include "mokagram/plugins/mokagram_plugin_install.h"
 #include "storage/storage_media_prepare.h"

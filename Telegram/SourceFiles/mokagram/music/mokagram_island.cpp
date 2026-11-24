@@ -148,7 +148,8 @@ public:
 	}
 	void to(double target, Motion motion) {
 		_target = target;
-		_motion = motion;
+		_stiffness = std::pow(2. * M_PI / motion.response, 2);
+		_damping = 4. * M_PI * motion.damping / motion.response;
 	}
 	[[nodiscard]] double value() const {
 		return _value;
@@ -160,9 +161,11 @@ public:
 		return (_value == _target) && (_velocity == 0.);
 	}
 	void step(double dt, double epsilon) {
-		const auto k = std::pow(2. * M_PI / _motion.response, 2);
-		const auto c = 4. * M_PI * _motion.damping / _motion.response;
-		_velocity += (-k * (_value - _target) - c * _velocity) * dt;
+		if (settled()) {
+			return;
+		}
+		_velocity += (-_stiffness * (_value - _target)
+			- _damping * _velocity) * dt;
 		_value += _velocity * dt;
 		if (std::abs(_value - _target) < epsilon
 			&& std::abs(_velocity) < epsilon * 10.) {
@@ -174,7 +177,8 @@ private:
 	double _value = 0.;
 	double _velocity = 0.;
 	double _target = 0.;
-	Motion _motion = kResize;
+	double _stiffness = std::pow(2. * M_PI / kResize.response, 2);
+	double _damping = 4. * M_PI * kResize.damping / kResize.response;
 
 };
 

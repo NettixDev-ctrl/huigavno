@@ -1175,8 +1175,13 @@ void ResolveTrackArtist(
 		const Track &track,
 		const QString &name,
 		Fn<void(ArtistInfo)> done) {
-	const auto matches = [target = name.simplified()](const QString &candidate) {
-		return candidate.simplified().compare(target, Qt::CaseInsensitive) == 0;
+	const auto normalize = [](QString value) {
+		static const auto separators = QRegularExpression(u"[^\\p{L}\\p{N}]+"_q);
+		return value.normalized(QString::NormalizationForm_C).toCaseFolded()
+			.replace(u'ё', u'е').remove(separators);
+	};
+	const auto matches = [=, target = normalize(name)](const QString &candidate) {
+		return !target.isEmpty() && normalize(candidate) == target;
 	};
 	const auto findByName = [=] {
 		auto query = QUrlQuery();
@@ -1187,12 +1192,13 @@ void ResolveTrackArtist(
 				QByteArray data,
 				QString error) {
 			auto best = ArtistInfo();
-			auto bestRank = std::pair(false, qint64(0));
+			auto bestRank = std::tuple(false, false, qint64(0));
 			if (error.isEmpty()) {
 				const auto collection = QJsonDocument::fromJson(data).object().value("collection").toArray();
 				for (const auto &value : collection) {
 					const auto object = value.toObject();
-					if (!matches(object.value("username").toString())) {
+					if (!matches(object.value("username").toString())
+					&& !matches(object.value("full_name").toString())) {
 						continue;
 					}
 					auto artist = ParseArtistInfo(object, QString());

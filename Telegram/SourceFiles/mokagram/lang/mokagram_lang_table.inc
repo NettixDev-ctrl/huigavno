@@ -1161,6 +1161,7 @@
 	{ "%1 кбит/с", "%1 kbps" },
 	{ "Сведения о записи", "Audio details" },
 	{ "Скорость воспроизведения", "Playback speed" },
+	{ "Менять высоту тона", "Change pitch with speed" },
 	{ "Эта ссылка пока не поддерживается.", "This link is not supported yet." },
 	{ "Эта ссылка уже скачивается.", "This link is already being downloaded." },
 	{ "Сколько стикеров играет одновременно", "How many stickers play at once" },

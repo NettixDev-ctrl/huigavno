@@ -723,6 +723,8 @@ find ../patches/ffmpeg -type f -name '*.patch' -print0 | sort -z | xargs -r0 git
 	--enable-encoder=libvpx_vp9 \
 	--enable-encoder=libopus \
 	--enable-encoder=pcm_s16le \
+	--enable-filter=aresample \
+	--enable-filter=asetrate \
 	--enable-filter=atempo \
 	--enable-parser=aac \
 	--enable-parser=aac_latm \

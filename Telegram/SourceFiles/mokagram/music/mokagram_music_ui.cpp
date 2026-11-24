@@ -3,6 +3,7 @@
 // of MOKAGRAM_NOTICE.md (section 7(b)): keep this notice when copying.
 // mokagram-id: 7b8dec14
 #include "mokagram/music/mokagram_music_ui.h"
+#include "media/audio/media_audio_ffmpeg_loader.h"
 #include "mokagram/music/mokagram_tyanka_hikka.h"
 #include "mokagram/music/mokagram_music_presence.h"
 #include "mokagram/ui/mokagram_box_parts.h"
@@ -12353,6 +12354,31 @@ void ShowCurrentTrackMenu(
 			});
 			action->setCheckable(true);
 			action->setChecked(std::abs(rate - currentSpeed) < 0.001);
+		}
+		if (Media::Audio::SupportsMusicPitchWithSpeed()) {
+			const auto key = u"player.pitch_with_speed"_q;
+			submenu->addSeparator();
+			const auto action = submenu->addAction(
+				QString::fromUtf8(Mokagram::Lang::Tr("Менять высоту тона")), [=] {
+					Mokagram::Settings::SetBool(key, !Mokagram::Settings::Bool(key));
+					const auto type = AudioMsgId::Type::Song;
+					const auto state = instance->getState(type);
+					if (state.length <= 0 || Media::Player::IsStoppedOrStopping(state.state)
+						|| Core::App().settings().audioPlaybackSpeed() == 1.) {
+						return;
+					}
+					const auto progress = std::clamp(
+						state.position / float64(state.length), 0., 1.);
+					instance->startSeeking(type);
+					if (Media::Player::IsPausedOrPausing(state.state)) {
+						instance->updateSeeking(type, progress);
+						instance->cancelSeeking(type);
+					} else {
+						instance->finishSeeking(type, progress);
+					}
+				});
+			action->setCheckable(true);
+			action->setChecked(Mokagram::Settings::Bool(key));
 		}
 		menu->addAction(
 			QString::fromUtf8(Mokagram::Lang::Tr("Скорость воспроизведения"))

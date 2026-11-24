@@ -425,6 +425,7 @@ Loaders::SetupLoaderResult Loaders::setupLoader(
 		case AudioMsgId::Type::Video: _video = audio; loader = &_videoLoader; break;
 		}
 
+		auto created = std::unique_ptr<AbstractAudioFFMpegLoader>();
 		if (audio.externalPlayId()) {
 			if (!track->externalData) {
 				clear(audio.type());
@@ -433,15 +434,18 @@ Loaders::SetupLoaderResult Loaders::setupLoader(
 				LOG(("Audio Error: video sound data not ready"));
 				return {};
 			}
-			*loader = std::make_unique<ChildFFMpegLoader>(
+			created = std::make_unique<ChildFFMpegLoader>(
 				std::move(track->externalData));
 		} else {
-			*loader = std::make_unique<FFMpegLoader>(
+			created = std::make_unique<FFMpegLoader>(
 				track->file,
 				track->data,
 				bytes::vector());
 		}
-		l = loader->get();
+		// Mokagram: the pitch option applies to music only.
+		created->setMusic(audio.type() == AudioMsgId::Type::Song);
+		l = created.get();
+		*loader = std::move(created);
 
 		track->speed = track->nextSpeed;
 		if (!l->open(positionMs, track->speed)) {

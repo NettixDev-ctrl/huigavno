@@ -12,6 +12,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ffmpeg/ffmpeg_utility.h"
 #include "media/media_common.h"
 
+#include <atomic>
+
 extern "C" {
 #include <libavfilter/buffersink.h>
 #include <libavfilter/buffersrc.h>
@@ -23,7 +25,20 @@ namespace {
 using FFmpeg::AvErrorWrap;
 using FFmpeg::LogError;
 
+// Mokagram: the loader thread reads this preference when setting up a song.
+std::atomic<bool> MusicPitchWithSpeed = false;
+
 } // namespace
+
+bool Audio::SupportsMusicPitchWithSpeed() {
+	static const auto result = avfilter_get_by_name("asetrate")
+		&& avfilter_get_by_name("aresample");
+	return result;
+}
+
+void Audio::SetMusicPitchWithSpeed(bool enabled) {
+	MusicPitchWithSpeed.store(enabled, std::memory_order_relaxed);
+}
 
 int64 AbstractFFMpegLoader::Mul(int64 value, AVRational rational) {
 	return value * rational.num / rational.den;
@@ -482,9 +497,11 @@ void AbstractAudioFFMpegLoader::createSpeedFilter(float64 speed) {
 	}
 	const auto abuffer = avfilter_get_by_name("abuffer");
 	const auto abuffersink = avfilter_get_by_name("abuffersink");
-	const auto atempo = avfilter_get_by_name("atempo");
-	if (!abuffer || !abuffersink || !atempo) {
-		LOG(("FFmpeg Error: Could not find abuffer / abuffersink /atempo."));
+	const auto pitch = _music && MusicPitchWithSpeed.load(std::memory_order_relaxed)
+		&& Audio::SupportsMusicPitchWithSpeed();
+	const auto speedFilter = avfilter_get_by_name(pitch ? "asetrate" : "atempo");
+	if (!abuffer || !abuffersink || !speedFilter) {
+		LOG(("FFmpeg Error: Missing audio speed filters."));
 		return;
 	}
 
@@ -498,11 +515,9 @@ void AbstractAudioFFMpegLoader::createSpeedFilter(float64 speed) {
 	});
 
 	_filterSrc = avfilter_graph_alloc_filter(graph, abuffer, "src");
-	_atempo = avfilter_graph_alloc_filter(graph, atempo, "atempo");
 	_filterSink = avfilter_graph_alloc_filter(graph, abuffersink, "sink");
-	if (!_filterSrc || !atempo || !_filterSink) {
-		LOG(("FFmpeg Error: "
-			"Could not allocate abuffer / abuffersink /atempo."));
+	if (!_filterSrc || !_filterSink) {
+		LOG(("FFmpeg Error: Could not allocate audio filter endpoints."));
 		return;
 	}
 
@@ -532,35 +547,43 @@ void AbstractAudioFFMpegLoader::createSpeedFilter(float64 speed) {
 		"sample_rate",
 		_swrDstRate,
 		AV_OPT_SEARCH_CHILDREN);
-	av_opt_set_double(
-		_atempo,
-		"tempo",
-		speed,
-		AV_OPT_SEARCH_CHILDREN);
 
 	AvErrorWrap error = 0;
+	AVFilterContext *speedContext = nullptr;
+	const auto args = pitch
+		? "sample_rate=" + QByteArray::number(qRound(_swrDstRate * speed))
+		: "tempo=" + QByteArray::number(speed);
 	if ((error = avfilter_init_str(_filterSrc, nullptr))) {
 		LogError(u"avfilter_init_str(src)"_q, error);
 		return;
-	} else if ((error = avfilter_init_str(_atempo, nullptr))) {
-		LogError(u"avfilter_init_str(atempo)"_q, error);
-		avfilter_graph_free(&graph);
+	} else if ((error = avfilter_graph_create_filter(
+			&speedContext, speedFilter, "speed", args.constData(), nullptr, graph))) {
+		LogError(u"avfilter_graph_create_filter(speed)"_q, error);
 		return;
 	} else if ((error = avfilter_init_str(_filterSink, nullptr))) {
 		LogError(u"avfilter_init_str(sink)"_q, error);
-		avfilter_graph_free(&graph);
 		return;
-	} else if ((error = avfilter_link(_filterSrc, 0, _atempo, 0))) {
-		LogError(u"avfilter_link(src->atempo)"_q, error);
-		avfilter_graph_free(&graph);
+	} else if ((error = avfilter_link(_filterSrc, 0, speedContext, 0))) {
+		LogError(u"avfilter_link(src->speed)"_q, error);
 		return;
-	} else if ((error = avfilter_link(_atempo, 0, _filterSink, 0))) {
-		LogError(u"avfilter_link(atempo->sink)"_q, error);
-		avfilter_graph_free(&graph);
-		return;
-	} else if ((error = avfilter_graph_config(graph, nullptr))) {
-		LogError("avfilter_link(atempo->sink)"_q, error);
-		avfilter_graph_free(&graph);
+	}
+	if (pitch) {
+		// The mixer still consumes the original sample rate.
+		const auto options = QByteArray::number(_swrDstRate)
+			+ ":out_sample_fmt=" + av_get_sample_fmt_name(_swrDstSampleFormat);
+		AVFilterContext *resample = nullptr;
+		if ((error = avfilter_graph_create_filter(&resample,
+				avfilter_get_by_name("aresample"), "resample",
+				options.constData(), nullptr, graph))
+			|| (error = avfilter_link(speedContext, 0, resample, 0))) {
+			LogError(u"avfilter setup for music pitch"_q, error);
+			return;
+		}
+		speedContext = resample;
+	}
+	if ((error = avfilter_link(speedContext, 0, _filterSink, 0))
+		|| (error = avfilter_graph_config(graph, nullptr))) {
+		LogError(u"avfilter graph configuration for audio speed"_q, error);
 		return;
 	}
 	_filterGraph = base::take(graph);

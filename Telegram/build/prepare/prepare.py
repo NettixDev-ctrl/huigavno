@@ -1312,6 +1312,8 @@ mac:
         --enable-encoder=libopenh264 \
         --enable-encoder=libvpx_vp9 \
         --enable-encoder=pcm_s16le \
+        --enable-filter=aresample \
+        --enable-filter=asetrate \
         --enable-filter=atempo \
         --enable-parser=aac \
         --enable-parser=aac_latm \

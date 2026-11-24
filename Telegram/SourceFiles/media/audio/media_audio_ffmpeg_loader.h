@@ -27,6 +27,11 @@ class FileLocation;
 
 namespace Media {
 
+namespace Audio {
+[[nodiscard]] bool SupportsMusicPitchWithSpeed();
+void SetMusicPitchWithSpeed(bool enabled);
+} // namespace Audio
+
 class AbstractFFMpegLoader : public AudioPlayerLoader {
 public:
 	AbstractFFMpegLoader(
@@ -90,6 +95,7 @@ public:
 
 	void dropFramesTill(int64 samples) override;
 	int64 startReadingQueuedFrames(float64 newSpeed) override;
+	void setMusic(bool music) { _music = music; }
 
 	int samplesFrequency() override {
 		return _swrDstRate;
@@ -166,8 +172,8 @@ private:
 	AVFilterGraph *_filterGraph = nullptr;
 	float64 _filterSpeed = 1.;
 	AVFilterContext *_filterSrc = nullptr;
-	AVFilterContext *_atempo = nullptr;
 	AVFilterContext *_filterSink = nullptr;
+	bool _music = false;
 
 };
 

@@ -1,4 +1,5 @@
 #include "mokagram/music/mokagram_motion.h"
+#include "media/audio/media_audio_ffmpeg_loader.h"
 
 #include "mokagram/lang/mokagram_lang.h"
 #include "mokagram/settings/mokagram_settings.h"
@@ -727,6 +728,12 @@ void RegisterMotionSettings() {
 		}, .hidden = true });
 	Settings::IntValue(u"player.audio_filter"_q) | rpl::on_next([](int preset) {
 		::Media::Audio::SetFilterPreset(preset);
+	}, AudioFilterLifetime);
+	add({ .key = u"player.pitch_with_speed"_q,
+		.title = QString::fromUtf8(Lang::Tr("Менять высоту тона")),
+		.kind = Settings::Kind::Bool, .defaultValue = false, .hidden = true });
+	Settings::BoolValue(u"player.pitch_with_speed"_q) | rpl::on_next([](bool enabled) {
+		::Media::Audio::SetMusicPitchWithSpeed(enabled);
 	}, AudioFilterLifetime);
 	add({ .key = u"player.dynamic_background"_q,
 		.title = QString::fromUtf8(Lang::Tr("Динамичный фон плеера")),

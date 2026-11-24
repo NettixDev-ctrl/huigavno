@@ -135,7 +135,8 @@ public:
 	: FilledSlider(parent, st)
 	, _st(st)
 	, _waveAnimation([=] {
-		if ((!_playing && !_strength.animating())
+		if (!_wavy
+			|| (!_playing && !_strength.animating())
 			|| !isVisible()
 			|| PowerSaving::On(PowerSaving::kAnimations)) {
 			return false;
@@ -143,6 +144,14 @@ public:
 		update();
 		return true;
 	}) {
+		Mokagram::Settings::BoolValue(u"player.expressive_seek"_q)
+		| rpl::on_next([=](bool enabled) {
+			_wavy = enabled;
+			if (!_wavy) {
+				_waveAnimation.stop();
+			}
+			update();
+		}, lifetime());
 	}
 
 	void setPlaying(bool playing) {
@@ -150,6 +159,9 @@ public:
 			return;
 		}
 		_playing = playing;
+		if (!_wavy) {
+			return;
+		}
 		_strength.start([=] { update(); }, playing ? 0. : 1., playing ? 1. : 0., 450, anim::easeOutCubic);
 		if (!_waveAnimation.animating()) {
 			_waveAnimation.start();
@@ -159,6 +171,10 @@ public:
 
 protected:
 	void paintEvent(QPaintEvent *e) override {
+		if (!_wavy) {
+			FilledSlider::paintEvent(e);
+			return;
+		}
 		auto p = QPainter(this);
 		PainterHighQualityEnabler hq(p);
 		const auto disabled = isDisabled();
@@ -226,6 +242,7 @@ private:
 	const style::FilledSlider &_st;
 	Ui::Animations::Basic _waveAnimation;
 	Ui::Animations::Simple _strength;
+	bool _wavy = false;
 	bool _playing = false;
 
 };

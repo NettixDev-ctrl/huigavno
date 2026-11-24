@@ -1183,7 +1183,7 @@ void ResolveTrackArtist(
 	const auto matches = [=, target = normalize(name)](const QString &candidate) {
 		return !target.isEmpty() && normalize(candidate) == target;
 	};
-	const auto findByName = [=] {
+	const auto findByName = [=](ArtistInfo fallback) {
 		auto query = QUrlQuery();
 		query.addQueryItem(u"q"_q, name);
 		query.addQueryItem(u"limit"_q, QString::number(kPageSize));
@@ -1203,8 +1203,8 @@ void ResolveTrackArtist(
 					}
 					auto artist = ParseArtistInfo(object, QString());
 					const auto rank = std::tuple(
-						object.value("verified").toBool(),
 						!artist.bannerUrl.isEmpty(),
+						object.value("verified").toBool(),
 						object.value("followers_count").toVariant().toLongLong());
 					if (!artist.id.isEmpty() && (best.id.isEmpty() || rank > bestRank)) {
 						best = std::move(artist);
@@ -1213,34 +1213,40 @@ void ResolveTrackArtist(
 				}
 			}
 			if (!best.id.isEmpty()) {
-				done(std::move(best));
+				done(fallback.id.isEmpty() || !best.bannerUrl.isEmpty() ? best : fallback);
 				return;
 			}
 			SearchCatalog(name, SearchCategory::All, [=](std::vector<CatalogItem> items, QString) {
 				for (auto &item : items) {
 					if (const auto artist = std::get_if<ArtistInfo>(&item);
-						artist && matches(artist->name)) {
+						artist && matches(artist->name)
+						&& (fallback.id.isEmpty() || !artist->bannerUrl.isEmpty())) {
 						done(std::move(*artist));
 						return;
 					}
 				}
-				done({});
+				done(fallback);
 			});
 		});
 	};
-	if (ValidTrackId(track.artistId) && track.uploaderName.isEmpty()) {
-		LoadArtistInfo(track.artistId, [=](ArtistInfo info) {
-			if (!info.id.isEmpty() && matches(info.name)) {
+	if (!ValidTrackId(track.artistId)
+		|| (!track.uploaderName.isEmpty() && !matches(track.uploaderName))) {
+		findByName({});
+		return;
+	}
+	LoadArtistInfo(track.artistId, [=](ArtistInfo info) {
+		if (!info.id.isEmpty() && matches(info.name)) {
+			if (!info.bannerUrl.isEmpty()) {
 				done(std::move(info));
 			} else {
-				findByName();
+				findByName(std::move(info));
 			}
-		});
-	} else if (ValidTrackId(track.artistId) && matches(track.uploaderName)) {
-		done({ track.artistId, track.uploaderName, track.artistArtworkUrl, {} });
-	} else {
-		findByName();
-	}
+		} else {
+			findByName(matches(track.uploaderName)
+				? ArtistInfo{ track.artistId, track.uploaderName, track.artistArtworkUrl, {} }
+				: ArtistInfo());
+		}
+	});
 }
 
 void SearchLimited(

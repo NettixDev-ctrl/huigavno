@@ -5,6 +5,8 @@ mokaGram (24.11.26)
 - Move music persistence, artwork decoding and cache maintenance off the UI thread.
 - Release completed recommendation and sync state; pause hidden Canvas playback.
 - Open search albums in the full album page and preserve search position on return.
+- Preserve native YouTube Music artist and album identities instead of remapping by name.
+- Load paginated artist catalogues, including singles and EPs, without the twelve-track cutoff.
 
 7.4.4 (13.11.26)
 

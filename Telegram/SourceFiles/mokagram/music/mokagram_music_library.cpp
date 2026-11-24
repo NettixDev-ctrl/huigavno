@@ -1770,7 +1770,8 @@ void AddPlaylistTracks(const QString &id, const std::vector<Track> &tracks) {
 		if (playlist.id != id) continue;
 		auto changed = false;
 		for (const auto &track : tracks) {
-			if (track.id.isEmpty() || IsTelegramId(track.id) || track.unavailable) continue;
+			if (track.id.isEmpty() || IsTelegramId(track.id)
+				|| (track.unavailable && !HasYouTubeMusicMetadata(track))) continue;
 			if (std::any_of(playlist.tracks.begin(), playlist.tracks.end(), [&](const Track &t) { return t.id == track.id; })) continue;
 			auto copy = track;
 			copy.transcodingUrl.clear();

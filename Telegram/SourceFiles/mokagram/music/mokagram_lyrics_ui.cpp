@@ -29,6 +29,7 @@
 #include <QtGui/QGuiApplication>
 #include <QtGui/QLinearGradient>
 #include <QtGui/QTextLayout>
+#include <algorithm>
 #include <map>
 #include <set>
 
@@ -484,8 +485,7 @@ LyricsView::LyricsView(QWidget *parent)
 	}, lifetime());
 	Settings::Changed() | rpl::on_next([=](const QString &key) {
 		if (key == u"lyrics.comments"_q) {
-			_heights.clear();
-			_layouts.clear();
+			invalidateLayouts();
 			layoutComments();
 			update();
 		}
@@ -510,8 +510,7 @@ LyricsView::~LyricsView() = default;
 void LyricsView::setBig(bool big) {
 	_big = big;
 	_coverTint = false;
-	_heights.clear();
-	_layouts.clear();
+	invalidateLayouts();
 	updateTimer();
 	update();
 }
@@ -558,7 +557,12 @@ void LyricsView::updateCover() {
 }
 
 void LyricsView::setCommentsTrack(const QString &id) {
+	const auto previousWidth = textWidth();
 	_comments->setTrack(id);
+	if (previousWidth != textWidth()) {
+		invalidateLayouts();
+		update();
+	}
 	layoutComments();
 }
 
@@ -604,10 +608,7 @@ void LyricsView::wheelEvent(QWheelEvent *e) {
 		_scroll = std::clamp(_scroll + delta, minScroll, maxScroll);
 		_manualUntil = _clock.elapsed() + 3000;
 	} else {
-		auto total = 24.;
-		for (auto i = 0; i != int(_lyrics.lines.size()); ++i) {
-			total += heightOf(i);
-		}
+		const auto total = 24. + topOf(int(_lyrics.lines.size()));
 		_plainScroll = std::clamp(_plainScroll + delta, 0., std::max(total - lyricsHeight(), 0.));
 	}
 	e->accept();
@@ -632,18 +633,8 @@ void LyricsView::mousePressEvent(QMouseEvent *e) {
 	if (y >= lyricsHeight() || !_lyrics.found || !_lyrics.synced || _lyrics.lines.empty()) {
 		return -1;
 	}
-	auto top = anchorY() - _scroll;
-	for (auto i = 0; i != int(_lyrics.lines.size()); ++i) {
-		const auto lineHeight = heightOf(i);
-		if (y >= top && y < top + lineHeight) {
-			return i;
-		}
-		top += lineHeight;
-		if (top > height()) {
-			break;
-		}
-	}
-	return -1;
+	const auto index = lineAtOffset(y - (anchorY() - _scroll));
+	return (index >= 0 && index < int(_lyrics.lines.size())) ? index : -1;
 }
 
 void LyricsView::reset() {
@@ -653,10 +644,43 @@ void LyricsView::reset() {
 	_plainScroll = 0.;
 	_manualUntil = 0;
 	_scrollReady = false;
+	invalidateLayouts();
+	_weights.clear();
+	_fadingWeights.clear();
+	_fill = 0.;
+}
+
+void LyricsView::invalidateLayouts() {
 	_heights.clear();
 	_layouts.clear();
-	_weights.clear();
-	_fill = 0.;
+	_lineTops.clear();
+}
+
+void LyricsView::ensureLinePositions(int count) {
+	if (_lineTops.empty()) {
+		_lineTops.reserve(_lyrics.lines.size() + 1);
+		_lineTops.push_back(0.);
+	}
+	while (int(_lineTops.size()) <= count) {
+		const auto index = int(_lineTops.size()) - 1;
+		const auto next = _lineTops.back() + heightOf(index);
+		_lineTops.push_back(next);
+	}
+}
+
+double LyricsView::topOf(int index) {
+	ensureLinePositions(index);
+	return _lineTops[index];
+}
+
+int LyricsView::lineAtOffset(double y) {
+	ensureLinePositions(0);
+	while (_lineTops.back() <= y
+		&& _lineTops.size() <= _lyrics.lines.size()) {
+		ensureLinePositions(int(_lineTops.size()));
+	}
+	return int(std::upper_bound(_lineTops.begin(), _lineTops.end(), y)
+		- _lineTops.begin()) - 1;
 }
 
 // Позиция трека между обновлениями плеера: плавнее подсветка строк.
@@ -677,18 +701,26 @@ void LyricsView::tick() {
 	auto changed = false;
 	auto needLayout = false;
 	if (_lyrics.found && _lyrics.synced && !_lyrics.lines.empty()) {
-		auto index = -1;
 		const auto at = livePosition() + 120;
-		for (auto i = 0; i != int(_lyrics.lines.size()); ++i) {
-			if (_lyrics.lines[i].timeMs <= at) {
-				index = i;
-			} else {
-				break;
+		// LRC lines are timestamp-sorted; upper_bound keeps the last duplicate.
+		const auto next = std::upper_bound(
+			_lyrics.lines.begin(),
+			_lyrics.lines.end(),
+			at,
+			[](qint64 position, const LyricLine &line) {
+				return position < line.timeMs;
+			});
+		const auto index = int(next - _lyrics.lines.begin()) - 1;
+		if (_current != index) {
+			if (_current >= 0 && _weights[_current] > 0.f) {
+				_fadingWeights.push_back(_current);
 			}
+			_fadingWeights.erase(std::remove(
+				_fadingWeights.begin(), _fadingWeights.end(), index),
+				_fadingWeights.end());
+			changed = needLayout = true;
+			_current = index;
 		}
-		changed |= (_current != index);
-		needLayout |= (_current != index);
-		_current = index;
 		auto target = centerOf(std::max(index, 0));
 		const auto topMargin = double(style::ConvertScale(_big ? 32 : 16));
 		target = std::max(target, anchorY() - topMargin);
@@ -703,17 +735,35 @@ void LyricsView::tick() {
 		if (now >= _manualUntil) {
 			const auto was = _scroll;
 			changed |= (std::abs(target - _scroll) > 0.1);
-			_scroll += (target - _scroll)
-				* (_timer.isActive() ? (1. - std::exp(-dt * 6.5)) : 1.);
+			// Below a thousandth of a logical pixel the remainder is invisible.
+			_scroll = (std::abs(target - _scroll) <= 0.001)
+				? target
+				: _scroll + (target - _scroll)
+					* (_timer.isActive() ? (1. - std::exp(-dt * 6.5)) : 1.);
 			needLayout |= (_scroll != was);
 		}
 		const auto fade = _timer.isActive() && !snap
 			? float(1. - std::exp(-dt * 9.))
 			: 1.f;
-		for (auto i = 0; i != int(_weights.size()); ++i) {
-			const auto goal = (i == _current) ? 1.f : 0.f;
-			changed |= (std::abs(goal - _weights[i]) > 0.001f);
-			_weights[i] += (goal - _weights[i]) * fade;
+		const auto advanceWeight = [&](int i, float goal) {
+			auto &weight = _weights[i];
+			changed |= (std::abs(goal - weight) > 0.001f);
+			weight += (goal - weight) * fade;
+			// Far below QColor's alpha precision, stop updating settled lines.
+			if (std::abs(goal - weight) <= 0.000001f) {
+				weight = goal;
+			}
+		};
+		if (_current >= 0 && _weights[_current] != 1.f) {
+			advanceWeight(_current, 1.f);
+		}
+		for (auto i = _fadingWeights.begin(); i != _fadingWeights.end();) {
+			advanceWeight(*i, 0.f);
+			if (_weights[*i] == 0.f) {
+				i = _fadingWeights.erase(i);
+			} else {
+				++i;
+			}
 		}
 		const auto fill = (_current >= 0)
 			? lineProgress(_current, at)
@@ -838,11 +888,7 @@ void LyricsView::drawLayout(
 
 // Центр строки index в координатах содержимого.
 [[nodiscard]] double LyricsView::centerOf(int index) {
-	auto y = 0.;
-	for (auto i = 0; i != index; ++i) {
-		y += heightOf(i);
-	}
-	return y + heightOf(index) / 2.;
+	return topOf(index) + heightOf(index) / 2.;
 }
 
 void LyricsView::paintEvent(QPaintEvent *e) {
@@ -873,9 +919,11 @@ void LyricsView::paintEvent(QPaintEvent *e) {
 		return;
 	}
 	const auto count = int(_lyrics.lines.size());
-	auto top = _lyrics.synced ? (anchorY() - _scroll) : (12. - _plainScroll);
+	const auto offset = _lyrics.synced ? (anchorY() - _scroll) : (12. - _plainScroll);
+	const auto first = std::clamp(lineAtOffset(-20. - offset) - 1, 0, count);
+	auto top = offset + topOf(first);
 	p.setFont(lineFont());
-	for (auto i = 0; i != count; ++i) {
+	for (auto i = first; i != count; ++i) {
 		const auto lineHeight = heightOf(i);
 		if (top + lineHeight >= -20 && top <= height() + 20) {
 			const auto w = (_lyrics.synced && i < int(_weights.size()))
@@ -945,11 +993,17 @@ void LyricsView::layoutComments() {
 	const auto rowWidth = std::min(width(), style::ConvertScale(96));
 	auto top = anchorY() - _scroll;
 	if (_lyrics.synced && _current >= 0) {
-		for (auto i = 0; i < _current; ++i) top += heightOf(i);
+		top += topOf(_current);
 	}
 	const auto lineHeight = _current >= 0 ? heightOf(_current) : size;
-	_comments->setGeometry(std::max(0, width() - rowWidth - style::ConvertScale(8)),
-		std::clamp(int(top + lineHeight / 2.) - size / 2, 0, std::max(0, height() - size)), rowWidth, size);
+	const auto geometry = QRect(
+		std::max(0, width() - rowWidth - style::ConvertScale(8)),
+		std::clamp(int(top + lineHeight / 2.) - size / 2, 0, std::max(0, height() - size)),
+		rowWidth,
+		size);
+	if (_comments->geometry() != geometry) {
+		_comments->setGeometry(geometry);
+	}
 	_comments->raise();
 }
 
@@ -980,9 +1034,8 @@ void LyricsView::hideEvent(QHideEvent *e) {
 }
 
 void LyricsView::resizeEvent(QResizeEvent *e) {
+	invalidateLayouts();
 	layoutComments();
-	_heights.clear();
-	_layouts.clear();
 	RpWidget::resizeEvent(e);
 }
 

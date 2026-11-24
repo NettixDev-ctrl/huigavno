@@ -947,6 +947,14 @@ Media::Player::TrackState Player::prepareLegacyState() const {
 
 	auto result = Media::Player::TrackState();
 	result.id = _audioId.externalPlayId() ? _audioId : _options.audioId;
+	// Mokagram: streaming playback keeps a separate state, so forward the
+	// current PCM level from the shared OpenAL mixer to visual consumers.
+	if (const auto mixer = Media::Player::mixer()) {
+		const auto audio = mixer->currentState(_audioId.type());
+		if (audio.id == _audioId) {
+			result.visualizerLevel = audio.visualizerLevel;
+		}
+	}
 	result.state = (_lastFailure == Error::OpenFailed
 		|| _lastFailure == Error::NotStreamable)
 		? State::StoppedAtStart

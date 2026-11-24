@@ -47,11 +47,23 @@ public:
 	}
 	void setComment(const TrackComment &comment, const QImage &avatar, int availableWidth) {
 		const auto s = [](int v) { return style::ConvertScale(v); };
+		const auto cardWidth = std::min(s(360), std::max(0, availableWidth));
+		const auto availableHeight = std::max(0, parentWidget()->height() - s(28));
+		if (_author == comment.author
+			&& _timestampMs == comment.timestampMs
+			&& _avatar.cacheKey() == avatar.cacheKey()
+			&& _body.text() == comment.body
+			&& _body.font() == st::normalFont->f
+			&& width() == cardWidth
+			&& _availableHeight == availableHeight) {
+			return;
+		}
 		_author = comment.author;
-		const auto seconds = std::max<qint64>(0, comment.timestampMs / 1000);
+		_timestampMs = comment.timestampMs;
+		const auto seconds = std::max<qint64>(0, _timestampMs / 1000);
 		_time = u"%1:%2"_q.arg(seconds / 60).arg(seconds % 60, 2, 10, QChar('0'));
 		_avatar = avatar;
-		const auto cardWidth = std::min(s(360), std::max(0, availableWidth));
+		_availableHeight = availableHeight;
 		_body.clearLayout();
 		_body.setText(comment.body);
 		_body.setFont(st::normalFont->f);
@@ -68,8 +80,7 @@ public:
 			y += line.height();
 		}
 		_body.endLayout();
-		resize(cardWidth, std::min(s(72) + int(std::ceil(y)),
-			std::max(0, parentWidget()->height() - s(28))));
+		resize(cardWidth, std::min(s(72) + int(std::ceil(y)), availableHeight));
 		setAccessibleName(_author + u"\n"_q + comment.body);
 		update();
 	}
@@ -109,6 +120,8 @@ private:
 	QString _author, _time;
 	QImage _avatar;
 	QTextLayout _body;
+	qint64 _timestampMs = -1;
+	int _availableHeight = -1;
 };
 
 } // namespace
@@ -131,13 +144,15 @@ public:
 			++_generation;
 			_loading = false;
 			_comments.clear();
+			_ordered.clear();
+			_activeBegin = _activeEnd = -1;
 			_active.clear();
 			_avatars.clear();
 			_pendingAvatars.clear();
 			_next.clear();
 			_note.clear();
 			if (Settings::Bool(key) && validTrack()) load({});
-			refresh();
+			refresh(true);
 		}, lifetime());
 		Settings::RowIconsUpdated() | rpl::on_next([=] { update(); }, lifetime());
 	}
@@ -148,18 +163,20 @@ public:
 		++_generation;
 		_loading = false;
 		_comments.clear();
+		_ordered.clear();
+		_activeBegin = _activeEnd = -1;
 		_active.clear();
 		_avatars.clear();
 		_pendingAvatars.clear();
 		_next.clear();
 		_note.clear();
 		if (Settings::Bool(u"lyrics.comments"_q) && validTrack()) load({});
-		refresh();
+		refresh(true);
 	}
 	void setTimelineDuration(qint64 duration) {
 		if (_timelineDuration == duration) return;
 		_timelineDuration = duration;
-		refresh();
+		refresh(true);
 	}
 	void setPosition(qint64 position) {
 		if (_position == position) return;
@@ -330,24 +347,48 @@ private:
 		_hoverCard->show();
 		_hoverCard->raise();
 	}
-	void refresh() {
-		const auto wasActive = _active;
-		_shownTimestamp = -1;
-		_active.clear();
-		for (auto index = 0; index < int(_comments.size()); ++index) {
-			const auto &comment = _comments[index];
-			if (comment.timestampMs < 0 || (_timelineDuration <= 0
-				&& (comment.timestampMs > _position || _position - comment.timestampMs >= 7000))) continue;
-			_shownTimestamp = std::max(_shownTimestamp, comment.timestampMs);
-			_active.push_back(index);
+	void rebuildCommentOrder() {
+		_ordered.clear();
+		_ordered.reserve(_comments.size());
+		for (auto index = 0; index != int(_comments.size()); ++index) {
+			if (_comments[index].timestampMs >= 0) {
+				_ordered.push_back(index);
+			}
 		}
-		std::stable_sort(_active.begin(), _active.end(), [&](int left, int right) {
+		std::stable_sort(_ordered.begin(), _ordered.end(), [&](int left, int right) {
 			return _comments[left].timestampMs > _comments[right].timestampMs;
 		});
-		layoutSlots();
+		_activeBegin = _activeEnd = -1;
+	}
+	void refresh(bool forceLayout = false) {
+		const auto boundary = [&](qint64 position) {
+			return std::lower_bound(
+				_ordered.begin(),
+				_ordered.end(),
+				position,
+				[&](int index, qint64 at) {
+					return _comments[index].timestampMs > at;
+				});
+		};
+		const auto from = _timelineDuration > 0
+			? _ordered.begin() : boundary(_position);
+		const auto till = _timelineDuration > 0
+			? _ordered.end() : boundary(std::max<qint64>(_position, 0) - 7000);
+		const auto begin = int(from - _ordered.begin());
+		const auto end = int(till - _ordered.begin());
+		auto changed = false;
+		if (_activeBegin != begin || _activeEnd != end) {
+			changed = !std::equal(_active.begin(), _active.end(), from, till);
+			if (changed) _active.assign(from, till);
+			_activeBegin = begin;
+			_activeEnd = end;
+		}
+		if (changed || forceLayout) {
+			layoutSlots();
+			update();
+		}
 		updateHoverCard();
-		update();
-		if (wasActive != _active) _changes.fire({});
+		if (changed) _changes.fire({});
 		// Следующая страница нужна, когда воспроизведение дошло до её таймкодов.
 		if (!_loading && _note.isEmpty() && !_next.isEmpty()
 			&& (_timelineDuration > 0 || _comments.empty() || _comments.back().timestampMs <= _position + 7000)) {
@@ -374,14 +415,18 @@ private:
 					if (!exists) _comments.push_back(std::move(comment));
 				}
 				_next = std::move(page.next);
+				rebuildCommentOrder();
 			}
-			refresh();
+			refresh(true);
 		}));
 	}
 	base::unique_qptr<CommentHoverCard> _hoverCard;
 	QString _trackId, _next, _note;
 	std::vector<TrackComment> _comments;
 	std::vector<int> _active;
+	std::vector<int> _ordered;
+	int _activeBegin = -1;
+	int _activeEnd = -1;
 	std::vector<Slot> _slots;
 	std::map<QString, QImage> _avatars;
 	std::set<QString> _pendingAvatars;
@@ -390,7 +435,6 @@ private:
 	qint64 _timelineDuration = 0;
 	rpl::event_stream<> _changes;
 	rpl::event_stream<qint64> _seekRequests;
-	qint64 _shownTimestamp = -1;
 	qint64 _position = 0;
 	int _generation = 0;
 	bool _loading = false;

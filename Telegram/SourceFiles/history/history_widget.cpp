@@ -6808,12 +6808,9 @@ void HistoryWidget::cornerButtonsShowAtPosition(
 		Data::MessagePosition position) {
 	if (!_peer) {
 		return;
-	} else if (position == Data::UnreadMessagePosition) {
-		DEBUG_LOG(("JumpToEnd(%1, %2, %3): Show at unread requested."
-			).arg(_history->peer->name()
-			).arg(_history->inboxReadTillId().bare
-			).arg(Logs::b(_history->loadedAtBottom())));
-		showHistory(_peer->id, ShowAtUnreadMsgId);
+	} else if (position == Data::MaxMessagePosition) {
+		// Mokagram: Load the latest messages if the end is outside the current slice.
+		showHistory(_peer->id, ShowAtTheEndMsgId);
 	} else if (_peer && position.fullId.peer == _peer->id) {
 		showHistory(_peer->id, position.fullId.msg);
 	} else if (_migrated && position.fullId.peer == _migrated->peer->id) {

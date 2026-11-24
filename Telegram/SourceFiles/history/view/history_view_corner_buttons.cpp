@@ -299,7 +299,8 @@ bool CornerButtons::eventFilter(QObject *o, QEvent *e) {
 
 void CornerButtons::downClick() {
 	if (base::IsCtrlPressed() || !_replyReturn) {
-		_delegate->cornerButtonsShowAtPosition(Data::UnreadMessagePosition);
+		// Mokagram: Jump straight to the latest message.
+		_delegate->cornerButtonsShowAtPosition(Data::MaxMessagePosition);
 	} else {
 		_delegate->cornerButtonsShowAtPosition(_replyReturn->position());
 	}

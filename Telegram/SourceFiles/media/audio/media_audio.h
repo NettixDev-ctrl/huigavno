@@ -134,6 +134,8 @@ struct TrackState {
 	int frequency = kDefaultFrequency;
 	int fileHeaderSize = 0;
 	bool waitingForData = false;
+	// Mokagram: normalized amplitude from the PCM currently sent to OpenAL.
+	float visualizerLevel = 0.;
 };
 
 class Mixer final : public QObject {
@@ -224,6 +226,7 @@ private:
 		void setExternalData(std::unique_ptr<ExternalSoundData> data);
 
 		void updateStatePosition();
+		void updateVisualizerLevel();
 		void updateWithSpeedPosition();
 
 		[[nodiscard]] static int64 SpeedIndependentPosition(

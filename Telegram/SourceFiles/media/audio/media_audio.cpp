@@ -640,6 +640,44 @@ void Mixer::Track::setExternalData(
 
 void Mixer::Track::updateStatePosition() {
 	state.position = SpeedIndependentPosition(withSpeed.position, speed);
+	updateVisualizerLevel();
+}
+
+void Mixer::Track::updateVisualizerLevel() {
+	state.visualizerLevel = 0.;
+	const auto samples = withSpeed.samples[0];
+	const auto &buffer = withSpeed.buffered[0];
+	if (!samples || buffer.isEmpty()) {
+		return;
+	}
+	const auto bytesPerFrame = buffer.size() / samples;
+	if (bytesPerFrame <= 0) {
+		return;
+	}
+	const auto offset = std::clamp(
+		withSpeed.position - withSpeed.bufferedPosition,
+		int64(0),
+		int64(samples - 1));
+	const auto window = std::min<int64>(1024, samples - offset);
+	const auto begin = buffer.constData() + offset * bytesPerFrame;
+	uint64 total = 0;
+	if (format == AL_FORMAT_MONO16 || format == AL_FORMAT_STEREO16) {
+		const auto count = window * bytesPerFrame / int(sizeof(int16));
+		const auto values = reinterpret_cast<const int16*>(begin);
+		for (auto i = 0; i != count; ++i) {
+			total += std::abs(int(values[i]));
+		}
+		const auto average = total / double(count * 32767);
+		state.visualizerLevel = float(std::clamp(average * 4., 0., 1.));
+	} else if (format == AL_FORMAT_MONO8 || format == AL_FORMAT_STEREO8) {
+		const auto count = window * bytesPerFrame;
+		const auto values = reinterpret_cast<const uchar*>(begin);
+		for (auto i = 0; i != count; ++i) {
+			total += std::abs(int(values[i]) - 128);
+		}
+		const auto average = total / double(count * 127);
+		state.visualizerLevel = float(std::clamp(average * 4., 0., 1.));
+	}
 }
 
 void Mixer::Track::updateWithSpeedPosition() {

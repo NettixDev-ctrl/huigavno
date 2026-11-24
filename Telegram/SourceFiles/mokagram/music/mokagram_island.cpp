@@ -368,6 +368,7 @@ private:
 	Spring _expanded;
 	Spring _alpha;
 	Spring _level;
+	Spring _audioLevel;
 	Spring _coverScale;
 	crl::time _lastFrame = 0;
 	double _phase = 0.;
@@ -677,6 +678,7 @@ void Island::refreshState(const Media::Player::TrackState &state) {
 		_playingKnown = true;
 		_playing = playing;
 		_level.to(playing ? 1. : 0., kResize);
+		_audioLevel.to(playing ? state.visualizerLevel : 0., kResize);
 		_coverScale.to(playing ? 1. : kPausedCoverScale, kExpand);
 		if (animated) {
 			_swap.start([=] { update(); }, 0., 1., kSwapDuration, anim::easeOutCubic);
@@ -684,6 +686,9 @@ void Island::refreshState(const Media::Player::TrackState &state) {
 			_coverScale.jump(playing ? 1. : kPausedCoverScale);
 		}
 		startFrames();
+	}
+	if (_playing) {
+		_audioLevel.to(state.visualizerLevel, Motion{ 0.22, 0.9 });
 	}
 	update();
 }
@@ -716,6 +721,7 @@ bool Island::frame() {
 		_expanded.step(dt, 0.001);
 		_alpha.step(dt, 0.001);
 		_level.step(dt, 0.001);
+		_audioLevel.step(dt, 0.001);
 		_coverScale.step(dt, 0.001);
 	}
 	const auto moving = !_width.settled()
@@ -724,6 +730,7 @@ bool Island::frame() {
 		|| !_expanded.settled()
 		|| !_alpha.settled()
 		|| !_level.settled()
+		|| !_audioLevel.settled()
 		|| !_coverScale.settled();
 	const auto bars = _playing
 		&& !PowerSaving::On(PowerSaving::kAnimations);
@@ -1139,7 +1146,7 @@ void Island::paintBars(QPainter &p) {
 	const auto rect = barsRect();
 	const auto accent = CurrentCoverAccent();
 	const auto color = accent.isValid() ? accent : QColor(Qt::white);
-	const auto level = std::clamp(_level.value(), 0., 1.);
+	const auto level = std::clamp(_audioLevel.value(), 0., 1.);
 	const auto bar = S(kBarWidth);
 	const auto gap = S(kBarGap);
 	static constexpr auto kSpeed = std::array{ 9.1, 6.7, 11.3, 7.9, 10.2 };
@@ -1148,7 +1155,8 @@ void Island::paintBars(QPainter &p) {
 	p.setBrush(color);
 	for (auto i = 0; i != kBars; ++i) {
 		const auto wave = 0.5 + 0.5 * std::sin(_phase * kSpeed[i] + kShift[i]);
-		const auto value = Lerp(0.22, 0.3 + 0.7 * wave, level);
+		// Mokagram: the overall height follows the decoded PCM amplitude.
+		const auto value = Lerp(0.18, 0.34 + 0.66 * wave, level);
 		const auto height = std::max(rect.height() * value, double(bar));
 		const auto x = rect.x() + i * (bar + gap);
 		const auto y = rect.y() + (rect.height() - height) / 2.;

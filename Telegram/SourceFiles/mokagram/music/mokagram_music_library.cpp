@@ -8,11 +8,12 @@
 
 #include "base/random.h"
 #include "rpl/event_stream.h"
-#include <crl/crl_async.h>
 
+#include <QtCore/QCoreApplication>
 #include <QtCore/QDateTime>
 #include <QtCore/QDir>
 #include <QtCore/QFile>
+#include <QtCore/QFileInfo>
 #include <QtCore/QJsonArray>
 #include <QtCore/QJsonDocument>
 #include <QtCore/QJsonObject>
@@ -20,20 +21,24 @@
 #include <QtCore/QSaveFile>
 #include <QtCore/QStandardPaths>
 #include <QtCore/QUuid>
+#include <QtCore/QTimer>
 
 #include <algorithm>
-#include <atomic>
 #include <cmath>
+#include <condition_variable>
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <set>
+#include <thread>
 
 namespace Mokagram::Music {
 namespace {
 
 constexpr auto kHistoryLimit = 1000;
 constexpr auto kShownLimit = 500;
+constexpr auto kSaveDelayMs = 250;
 constexpr qint64 kEarlySkipMs = 30 * 1000;
 constexpr qint64 kFinishedCooldown = 30 * 86400;
 constexpr qint64 kPartialCooldown = 14 * 86400;
@@ -72,7 +77,8 @@ struct Shown {
 	qint64 at = 0;
 };
 
-struct Library {
+// Only value data crosses to the writer; event streams and timers stay on UI.
+struct LibraryData {
 	std::vector<Liked> liked;      // новые сверху
 	std::vector<QString> remoteLikes; // всё, что сейчас лайкнуто в аккаунте SoundCloud
 	std::vector<Listen> history;   // старые сверху
@@ -81,10 +87,21 @@ struct Library {
 	std::vector<Shown> shown;      // что уже попадало в подборку, старые сверху
 	std::vector<RecentItem> recent;
 	std::vector<Playlist> playlists;
+};
+
+class SaveWorker;
+
+struct Library : LibraryData {
+	Library();
+	~Library();
+
 	rpl::event_stream<> playlistsChanged;
 	bool loaded = false;
 	rpl::event_stream<> likesChanged;
 	rpl::event_stream<> recentChanged;
+	QTimer saveTimer;
+	bool savePending = false;
+	std::unique_ptr<SaveWorker> saveWorker;
 };
 
 [[nodiscard]] Library &Lib();
@@ -151,12 +168,7 @@ struct Library {
 	return t;
 }
 
-std::mutex SaveMutex;
-std::uint64_t SaveWritten = 0;
-std::atomic<std::uint64_t> SaveGeneration = 0;
-
-void Save() {
-	auto &lib = Lib();
+[[nodiscard]] QByteArray Serialize(const LibraryData &lib) {
 	auto liked = QJsonArray();
 	for (const auto &item : lib.liked) {
 		auto o = ToJson(item.track);
@@ -242,21 +254,121 @@ void Save() {
 		playlists.push_back(item);
 	}
 	root.insert("playlists", playlists);
-	const auto bytes = QJsonDocument(root).toJson(QJsonDocument::Compact);
-	const auto generation = ++SaveGeneration;
-	crl::async([bytes = std::move(bytes), path = FilePath(), generation] {
-		auto lock = std::lock_guard(SaveMutex);
-		if (generation < SaveWritten) {
-			return;
+	return QJsonDocument(root).toJson(QJsonDocument::Compact);
+}
+
+// A single writer preserves commit order, keeping only the newest queued state.
+class SaveWorker final {
+public:
+	explicit SaveWorker(QString path)
+	: _path(std::move(path))
+	, _thread([this] { run(); }) {
+	}
+
+	~SaveWorker() {
+		{
+			const auto lock = std::lock_guard(_mutex);
+			_stop = true;
 		}
-		SaveWritten = generation;
-		QDir().mkpath(QFileInfo(path).absolutePath());
-		auto file = QSaveFile(path);
-		if (file.open(QIODevice::WriteOnly)) {
-			file.write(bytes);
-			file.commit();
+		_condition.notify_all();
+		_thread.join();
+	}
+
+	void post(LibraryData data) {
+		auto pending = std::optional<LibraryData>(std::move(data));
+		{
+			const auto lock = std::lock_guard(_mutex);
+			_pending.swap(pending);
 		}
+		// Destroy superseded snapshots outside the lock used by the UI.
+		_condition.notify_all();
+	}
+
+	void drain() {
+		auto lock = std::unique_lock(_mutex);
+		_condition.wait(lock, [&] { return !_pending && !_writing; });
+	}
+
+private:
+	void run() {
+		auto lock = std::unique_lock(_mutex);
+		while (true) {
+			_condition.wait(lock, [&] { return _stop || _pending.has_value(); });
+			if (!_pending) {
+				break;
+			}
+			{
+				auto data = std::move(*_pending);
+				_pending.reset();
+				_writing = true;
+				lock.unlock();
+				const auto bytes = Serialize(data);
+				QDir().mkpath(QFileInfo(_path).absolutePath());
+				auto file = QSaveFile(_path);
+				if (file.open(QIODevice::WriteOnly)) {
+					if (file.write(bytes) == bytes.size()) {
+						file.commit();
+					} else {
+						file.cancelWriting();
+					}
+				}
+			}
+			lock.lock();
+			_writing = false;
+			_condition.notify_all();
+		}
+	}
+
+	const QString _path;
+	std::mutex _mutex;
+	std::condition_variable _condition;
+	std::optional<LibraryData> _pending;
+	bool _writing = false;
+	bool _stop = false;
+	std::thread _thread;
+};
+
+void FlushSave(Library &lib) {
+	lib.saveTimer.stop();
+	if (!lib.savePending) {
+		return;
+	}
+	if (!lib.saveWorker) {
+		lib.saveWorker = std::make_unique<SaveWorker>(FilePath());
+	}
+	// One immutable snapshot per batch, not per mutation. JSON is built off UI.
+	lib.saveWorker->post(static_cast<const LibraryData&>(lib));
+	lib.savePending = false;
+}
+
+Library::Library() {
+	saveTimer.setSingleShot(true);
+	QObject::connect(&saveTimer, &QTimer::timeout, &saveTimer, [this] {
+		FlushSave(*this);
 	});
+	if (const auto app = QCoreApplication::instance()) {
+		QObject::connect(app, &QCoreApplication::aboutToQuit, &saveTimer, [this] {
+			FlushSave(*this);
+			if (saveWorker) {
+				saveWorker->drain();
+			}
+		});
+	}
+}
+
+Library::~Library() {
+	// Also flush if teardown happens without another event-loop iteration.
+	FlushSave(*this);
+	saveWorker.reset();
+}
+
+void Save() {
+	auto &lib = Lib();
+	lib.savePending = true;
+	if (!lib.saveTimer.isActive()) {
+		// Do not restart: a continuous stream of mutations must still be saved.
+		lib.saveTimer.start(kSaveDelayMs);
+	}
 }
 
 Library &Lib() {
@@ -1476,6 +1588,7 @@ void NotifyLikesChanged() {
 
 int MergeRemoteLikes(const std::vector<Track> &remote, bool complete) {
 	auto &lib = Lib();
+	auto changed = false;
 	auto remoteIds = std::vector<QString>();
 	remoteIds.reserve(remote.size());
 	for (const auto &track : remote) {
@@ -1484,8 +1597,9 @@ int MergeRemoteLikes(const std::vector<Track> &remote, bool complete) {
 		}
 	}
 	// До последней страницы список аккаунта неполный: сохраняем предыдущий индекс.
-	if (complete) {
+	if (complete && lib.remoteLikes != remoteIds) {
 		lib.remoteLikes = remoteIds;
+		changed = true;
 	}
 	auto remoteSet = std::set<QString>(remoteIds.begin(), remoteIds.end());
 	auto imported = 0;
@@ -1517,6 +1631,7 @@ int MergeRemoteLikes(const std::vector<Track> &remote, bool complete) {
 			fresh.track.authorization.clear();
 			fresh.remote = true;
 			*i = std::move(fresh);
+			changed = true;
 		}
 	}
 	if (!fresh.empty()) {
@@ -1539,35 +1654,53 @@ int MergeRemoteLikes(const std::vector<Track> &remote, bool complete) {
 	auto reordered = false;
 	if (complete) {
 		auto slots = std::vector<int>();
-		auto byId = std::map<QString, Liked>();
+		auto byId = std::map<QString, const Liked*>();
 		for (auto i = 0; i != int(lib.liked.size()); ++i) {
 			const auto &id = lib.liked[i].track.id;
 			if (lib.liked[i].remote && remoteSet.contains(id)) {
 				slots.push_back(i);
-				byId.emplace(id, lib.liked[i]);
+				byId.emplace(id, &lib.liked[i]);
 			}
 		}
-		auto k = size_t(0);
+		auto order = std::vector<const Liked*>();
+		order.reserve(slots.size());
+		auto rewrite = false;
 		for (const auto &id : remoteIds) {
 			const auto j = byId.find(id);
-			if (j == byId.end() || k >= slots.size()) {
+			if (j == byId.end() || order.size() >= slots.size()) {
 				continue;
 			}
-			if (lib.liked[slots[k]].track.id != id) {
+			if (lib.liked[slots[order.size()]].track.id != id) {
 				reordered = true;
 			}
-			lib.liked[slots[k++]] = j->second;
+			rewrite = rewrite
+				|| (&lib.liked[slots[order.size()]] != j->second);
+			order.push_back(j->second);
+		}
+		if (rewrite) {
+			changed = true;
+			auto ordered = std::vector<Liked>();
+			ordered.reserve(order.size());
+			for (const auto item : order) {
+				ordered.push_back(*item);
+			}
+			for (auto i = size_t(0); i != ordered.size(); ++i) {
+				lib.liked[slots[i]] = std::move(ordered[i]);
+			}
 		}
 	}
 	if (imported || removed || reordered) {
 		lib.likesChanged.fire({});
 	}
-	Save();
+	if (changed || imported || removed || reordered) {
+		Save();
+	}
 	return imported;
 }
 
 void ClearRemoteLikes() {
 	auto &lib = Lib();
+	const auto hadRemoteIds = !lib.remoteLikes.empty();
 	auto removed = false;
 	for (auto i = lib.liked.begin(); i != lib.liked.end();) {
 		if (i->remote) {
@@ -1581,7 +1714,9 @@ void ClearRemoteLikes() {
 	if (removed) {
 		lib.likesChanged.fire({});
 	}
-	Save();
+	if (removed || hadRemoteIds) {
+		Save();
+	}
 }
 
 std::vector<Playlist> Playlists() {

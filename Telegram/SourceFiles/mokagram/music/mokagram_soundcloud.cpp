@@ -7,6 +7,7 @@
 #include "mokagram/lang/mokagram_lang.h"
 #include "mokagram/music/mokagram_music_library.h"
 #include "mokagram/music/mokagram_soundcloud_login.h"
+#include "mokagram/music/mokagram_youtube_music.h"
 
 #include "core/application.h"
 #include "rpl/event_stream.h"
@@ -1080,6 +1081,66 @@ void CollectionRequest(
 		});
 }
 
+[[nodiscard]] bool NextCollectionQuery(
+		const QUrl &endpoint,
+		const QJsonObject &root,
+		std::set<QString> &visited,
+		QUrlQuery &query) {
+	const auto next = QUrl(root.value("next_href").toString(), QUrl::StrictMode);
+	if (!next.isValid()
+		|| next.scheme() != endpoint.scheme()
+		|| next.host() != endpoint.host()
+		|| next.path() != endpoint.path()
+		|| next.port(-1) != -1
+		|| !next.userInfo().isEmpty()
+		|| next.hasFragment()) {
+		return false;
+	}
+	auto items = QUrlQuery(next).queryItems();
+	items.removeIf([](const auto &item) { return item.first == u"client_id"_q; });
+	std::sort(items.begin(), items.end());
+	query = QUrlQuery();
+	query.setQueryItems(items);
+	return !query.isEmpty() && visited.insert(query.toString()).second;
+}
+
+struct ArtistTracksRequest {
+	std::set<QString> visited;
+	std::set<QString> ids;
+	std::vector<Track> tracks;
+	Fn<void(std::vector<Track>)> done;
+	bool includeUnavailable = false;
+};
+
+void LoadArtistTracksPage(
+		const QUrl &endpoint,
+		QUrlQuery query,
+		const std::shared_ptr<ArtistTracksRequest> &request) {
+	ApiGet(endpoint.toString(), std::move(query), [=](
+			QByteArray data,
+			QString error) {
+		if (error.isEmpty()) {
+			const auto root = QJsonDocument::fromJson(data).object();
+			for (const auto &value : root.value("collection").toArray()) {
+				auto track = ParseTrack(value.toObject());
+				track.unavailable = track.transcodingUrl.isEmpty();
+				if (ValidTrackId(track.id)
+					&& (!track.unavailable
+						|| (request->includeUnavailable && !track.title.isEmpty()))
+					&& request->ids.insert(track.id).second) {
+					request->tracks.push_back(std::move(track));
+				}
+			}
+			auto nextQuery = QUrlQuery();
+			if (NextCollectionQuery(endpoint, root, request->visited, nextQuery)) {
+				LoadArtistTracksPage(endpoint, std::move(nextQuery), request);
+				return;
+			}
+		}
+		request->done(std::move(request->tracks));
+	});
+}
+
 } // namespace
 
 void Resolve(
@@ -1163,10 +1224,25 @@ void UserTracks(
 		int limit,
 		Fn<void(std::vector<Track>)> done,
 		bool includeUnavailable) {
-	auto q = QUrlQuery();
-	q.addQueryItem(u"limit"_q, QString::number(limit));
-	CollectionRequest(u"/users/"_q + userId + u"/tracks"_q, q,
-		std::move(done), includeUnavailable);
+	if (!ValidTrackId(userId)) {
+		done({});
+		return;
+	}
+	auto query = QUrlQuery();
+	const auto path = u"/users/"_q + userId + u"/tracks"_q;
+	if (limit > 0) {
+		query.addQueryItem(u"limit"_q, QString::number(limit));
+		CollectionRequest(path, std::move(query), std::move(done), includeUnavailable);
+		return;
+	}
+	query.addQueryItem(u"limit"_q, u"200"_q);
+	query.addQueryItem(u"linked_partitioning"_q, u"1"_q);
+	const auto request = std::make_shared<ArtistTracksRequest>();
+	request->visited.insert(query.toString());
+	request->done = std::move(done);
+	request->includeUnavailable = includeUnavailable;
+	LoadArtistTracksPage(QUrl(QString::fromLatin1(kApi) + path),
+		std::move(query), request);
 }
 
 void LoadArtistInfo(
@@ -1241,7 +1317,7 @@ void ResolveTrackArtist(
 	const auto matches = [=, target = normalize(name)](const QString &candidate) {
 		return !target.isEmpty() && normalize(candidate) == target;
 	};
-	const auto findByName = [=](ArtistInfo fallback) {
+	const auto findByName = [=] {
 		auto query = QUrlQuery();
 		query.addQueryItem(u"q"_q, name);
 		query.addQueryItem(u"limit"_q, QString::number(kPageSize));
@@ -1250,7 +1326,7 @@ void ResolveTrackArtist(
 				QByteArray data,
 				QString error) {
 			auto best = ArtistInfo();
-			auto bestRank = std::tuple(false, false, qint64(0));
+			auto bestRank = std::tuple(false, qint64(0), false);
 			if (error.isEmpty()) {
 				const auto collection = QJsonDocument::fromJson(data).object().value("collection").toArray();
 				for (const auto &value : collection) {
@@ -1261,9 +1337,9 @@ void ResolveTrackArtist(
 					}
 					auto artist = ParseArtistInfo(object, QString());
 					const auto rank = std::tuple(
-						!artist.bannerUrl.isEmpty(),
 						object.value("verified").toBool(),
-						object.value("followers_count").toVariant().toLongLong());
+						object.value("followers_count").toVariant().toLongLong(),
+						!artist.bannerUrl.isEmpty());
 					if (!artist.id.isEmpty() && (best.id.isEmpty() || rank > bestRank)) {
 						best = std::move(artist);
 						bestRank = rank;
@@ -1271,38 +1347,37 @@ void ResolveTrackArtist(
 				}
 			}
 			if (!best.id.isEmpty()) {
-				done(fallback.id.isEmpty() || !best.bannerUrl.isEmpty() ? best : fallback);
+				done(std::move(best));
 				return;
 			}
 			SearchCatalog(name, SearchCategory::All, [=](std::vector<CatalogItem> items, QString) {
 				for (auto &item : items) {
 					if (const auto artist = std::get_if<ArtistInfo>(&item);
-						artist && matches(artist->name)
-						&& (fallback.id.isEmpty() || !artist->bannerUrl.isEmpty())) {
+						artist && matches(artist->name)) {
 						done(std::move(*artist));
 						return;
 					}
 				}
-				done(fallback);
+				done({});
 			});
 		});
 	};
 	if (!ValidTrackId(track.artistId)
 		|| (!track.uploaderName.isEmpty() && !matches(track.uploaderName))) {
-		findByName({});
+		findByName();
 		return;
 	}
 	LoadArtistInfo(track.artistId, [=](ArtistInfo info) {
-		if (!info.id.isEmpty() && matches(info.name)) {
-			if (!info.bannerUrl.isEmpty()) {
-				done(std::move(info));
-			} else {
-				findByName(std::move(info));
-			}
+		if (info.id == track.artistId && matches(info.name)) {
+			done(std::move(info));
+		} else if (matches(track.uploaderName)) {
+			// The track identifies its uploader even if the profile was renamed
+			// or cannot be fetched. Artwork must never select a different id.
+			done(info.id == track.artistId
+				? std::move(info)
+				: ArtistInfo{ track.artistId, track.uploaderName, track.artistArtworkUrl, {} });
 		} else {
-			findByName(matches(track.uploaderName)
-				? ArtistInfo{ track.artistId, track.uploaderName, track.artistArtworkUrl, {} }
-				: ArtistInfo());
+			findByName();
 		}
 	});
 }
@@ -1336,11 +1411,11 @@ namespace {
 
 [[nodiscard]] Album ParseAlbum(const QJsonObject &object) {
 	auto result = Album();
-	result.id = QString::number(object.value("id").toVariant().toLongLong());
+	result.id = ResourceId(object, u"id"_q);
 	result.title = object.value("title").toString();
 	const auto user = object.value("user").toObject();
 	result.artist = user.value("username").toString();
-	result.artistId = QString::number(user.value("id").toVariant().toLongLong());
+	result.artistId = ResourceId(user, u"id"_q);
 	const auto tracks = object.value("tracks").toArray();
 	result.artworkUrl = object.value("artwork_url").toString();
 	if (result.artworkUrl.isEmpty() && !tracks.isEmpty()) {
@@ -1350,8 +1425,10 @@ namespace {
 		result.artworkUrl = user.value("avatar_url").toString();
 	}
 	result.trackCount = object.value("track_count").toInt();
-	const auto type = object.value("set_type").toString(
-		object.value("playlist_type").toString()).trimmed().toLower();
+	auto type = object.value("set_type").toString().trimmed().toLower();
+	if (type.isEmpty()) {
+		type = object.value("playlist_type").toString().trimmed().toLower();
+	}
 	if (type == u"single"_q) {
 		result.releaseKind = ReleaseKind::Single;
 	} else if (type == u"ep"_q) {
@@ -1396,7 +1473,7 @@ void AlbumsRequest(
 				const auto root = QJsonDocument::fromJson(data).object();
 				for (const auto &value : root.value("collection").toArray()) {
 					auto album = ParseAlbum(value.toObject());
-					if (album.id != u"0"_q && album.trackCount > 0) {
+					if (ValidTrackId(album.id) && album.trackCount > 0) {
 						result.push_back(std::move(album));
 					}
 				}
@@ -1405,38 +1482,60 @@ void AlbumsRequest(
 		});
 }
 
+struct ArtistAlbumsRequest {
+	QString userId;
+	std::set<QString> visited;
+	std::map<QString, size_t> ids;
+	std::vector<Album> albums;
+	Fn<void(std::vector<Album>)> done;
+	bool supplementary = false;
+};
+
 void LoadArtistAlbumsPage(
 		const QUrl &endpoint,
 		QUrlQuery query,
-		std::set<QString> visited,
-		std::vector<Album> albums,
-		Fn<void(std::vector<Album>)> done) {
-	ApiGet(endpoint.toString(), std::move(query), [=,
-			visited = std::move(visited),
-			albums = std::move(albums)](QByteArray data, QString error) mutable {
+		const std::shared_ptr<ArtistAlbumsRequest> &request) {
+	ApiGet(endpoint.toString(), std::move(query), [=](
+			QByteArray data,
+			QString error) {
 		if (error.isEmpty()) {
 			const auto root = QJsonDocument::fromJson(data).object();
 			for (const auto &value : root.value("collection").toArray()) {
 				auto album = ParseAlbum(value.toObject());
-				if (ValidTrackId(album.id) && !album.title.isEmpty()
-					&& std::ranges::none_of(albums, [&](const Album &other) {
-						return other.id == album.id;
-					})) {
-					albums.push_back(std::move(album));
+				if (!ValidTrackId(album.id) || album.title.isEmpty()
+					|| (request->supplementary && album.releaseKind == ReleaseKind::Unknown)) {
+					continue;
+				}
+				const auto [entry, inserted] = request->ids.emplace(
+					album.id, request->albums.size());
+				if (inserted) {
+					request->albums.push_back(std::move(album));
+				} else if (auto &existing = request->albums[entry->second];
+					existing.releaseKind == ReleaseKind::Unknown) {
+					existing.releaseKind = album.releaseKind;
 				}
 			}
-			const auto next = QUrl(root.value("next_href").toString());
-			auto nextQuery = QUrlQuery(next);
-			nextQuery.removeAllQueryItems(u"client_id"_q);
-			if (next.scheme() == endpoint.scheme() && next.host() == endpoint.host()
-				&& next.path() == endpoint.path() && !nextQuery.isEmpty()
-				&& visited.insert(nextQuery.toString()).second) {
-				LoadArtistAlbumsPage(endpoint, std::move(nextQuery),
-					std::move(visited), std::move(albums), done);
+			auto nextQuery = QUrlQuery();
+			if (NextCollectionQuery(endpoint, root, request->visited, nextQuery)) {
+				LoadArtistAlbumsPage(endpoint, std::move(nextQuery), request);
 				return;
 			}
 		}
-		done(std::move(albums));
+		if (!request->supplementary) {
+			// /albums may omit singles and EPs; /playlists also exposes those
+			// native release sets. Unclassified curated playlists stay out.
+			request->supplementary = true;
+			auto query = QUrlQuery();
+			query.addQueryItem(u"limit"_q, u"200"_q);
+			query.addQueryItem(u"linked_partitioning"_q, u"1"_q);
+			request->visited.clear();
+			request->visited.insert(query.toString());
+			const auto sets = QUrl(QString::fromLatin1(kApi)
+				+ u"/users/"_q + request->userId + u"/playlists"_q);
+			LoadArtistAlbumsPage(sets, std::move(query), request);
+			return;
+		}
+		request->done(std::move(request->albums));
 	});
 }
 
@@ -1612,11 +1711,13 @@ void LoadArtistAlbums(
 	const auto endpoint = QUrl(QString::fromLatin1(kApi)
 		+ u"/users/"_q + userId + u"/albums"_q);
 	auto query = QUrlQuery();
-	query.addQueryItem(u"limit"_q, QString::number(kPageSize));
+	query.addQueryItem(u"limit"_q, u"200"_q);
 	query.addQueryItem(u"linked_partitioning"_q, u"1"_q);
-	auto visited = std::set<QString>{ query.toString() };
-	LoadArtistAlbumsPage(endpoint, std::move(query), std::move(visited), {},
-		std::move(done));
+	const auto request = std::make_shared<ArtistAlbumsRequest>();
+	request->userId = userId;
+	request->visited.insert(query.toString());
+	request->done = std::move(done);
+	LoadArtistAlbumsPage(endpoint, std::move(query), request);
 }
 
 void LoadDiscoverPlaylists(Fn<void(std::vector<Album>, QString error)> done) {
@@ -1713,6 +1814,10 @@ void TrackAlbums(
 void AlbumTracks(
 		const QString &albumId,
 		Fn<void(std::vector<Track>, QString error)> done) {
+	if (albumId.startsWith(u"yt:"_q)) {
+		LoadYouTubeMusicAlbum(albumId, std::move(done));
+		return;
+	}
 	ApiGet(
 		QString::fromLatin1(kApi) + u"/playlists/"_q + albumId,
 		QUrlQuery(),

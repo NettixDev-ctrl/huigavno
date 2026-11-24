@@ -125,6 +125,7 @@
 #include <QtCore/QDir>
 #include <QtCore/QFile>
 #include <QtCore/QFileInfo>
+#include <QtCore/QLocale>
 #include <QtCore/QStandardPaths>
 #include <QtCore/QElapsedTimer>
 #include <QtCore/QTimer>
@@ -12314,6 +12315,26 @@ void ShowCurrentTrackMenu(
 	add(QString::fromUtf8(Mokagram::Lang::Tr("Пауза / играть")), [=] {
 		instance->playPause(AudioMsgId::Type::Song);
 	}, &st::menuIconSoundOn);
+	if (instance->current(AudioMsgId::Type::Song).changeablePlaybackSpeed()) {
+		const auto currentSpeed = Core::App().settings().audioPlaybackSpeed();
+		const auto speedText = [](double rate) {
+			return QLocale().toString(rate, 'g', 3) + u"×"_q;
+		};
+		auto submenu = std::make_unique<Ui::PopupMenu>(menu.get(), st::popupMenuWithIcons);
+		for (const auto rate : { 0.5, 0.75, 1., 1.25, 1.5, 1.75, 2. }) {
+			const auto action = submenu->addAction(speedText(rate), [=] {
+				Core::App().settings().setAudioPlaybackSpeed(rate);
+				Core::App().saveSettingsDelayed();
+				instance->updatePlaybackSpeed();
+			});
+			action->setCheckable(true);
+			action->setChecked(std::abs(rate - currentSpeed) < 0.001);
+		}
+		menu->addAction(
+			tr::lng_mediaview_playback_speed(tr::now) + u" · "_q + speedText(currentSpeed),
+			std::move(submenu),
+			nullptr);
+	}
 	if (UsesQueue(instance->current(AudioMsgId::Type::Song))
 		&& PreviousAvailable()) {
 		add(QString::fromUtf8(Mokagram::Lang::Tr("Предыдущий")), [] { Step(-1); }, &st::menuIconAbove);

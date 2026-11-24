@@ -1211,7 +1211,20 @@ void ResolveTrackArtist(
 					}
 				}
 			}
-			done(std::move(best));
+			if (!best.id.isEmpty()) {
+				done(std::move(best));
+				return;
+			}
+			SearchCatalog(name, SearchCategory::All, [=](std::vector<CatalogItem> items, QString) {
+				for (auto &item : items) {
+					if (const auto artist = std::get_if<ArtistInfo>(&item);
+						artist && matches(artist->name)) {
+						done(std::move(*artist));
+						return;
+					}
+				}
+				done({});
+			});
 		});
 	};
 	if (ValidTrackId(track.artistId) && track.uploaderName.isEmpty()) {

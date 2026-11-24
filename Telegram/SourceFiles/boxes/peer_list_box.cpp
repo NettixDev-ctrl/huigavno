@@ -44,7 +44,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include <xxhash.h> // XXH64.
 #include <QtWidgets/QApplication>
-#include <QtWidgets/QToolTip>
 
 [[nodiscard]] PeerListRowId UniqueRowIdFromString(const QString &d) {
 	return XXH64(d.data(), d.size() * sizeof(ushort), 0);
@@ -962,7 +961,6 @@ int PeerListRow::paintNameIconGetLeadingWidth(
 		int nameTop,
 		int outerWidth,
 		bool selected) {
-	_leadingBadgeRect = QRect();
 	if (_skipPeerBadge
 		|| special()
 		|| !_savedMessagesStatus.isEmpty()
@@ -988,11 +986,7 @@ int PeerListRow::paintNameIconGetLeadingWidth(
 		p,
 		QPoint(nameLeft, nameTop),
 		st);
-	// Mokagram: сохраняем ту же позицию, которую использует отрисовка.
-	if (skip > 0 && !info->botId && !info->description.empty()) {
-		_leadingBadgeRect = QRect(QPoint(nameLeft, nameTop) + st.position, QSize(skip, skip));
-	}
-	return skip;
+	return skip;// ? skip + st::dialogsChatTypeSkip) : 0;
 }
 
 void PeerListRow::paintStatusIcon(Painter &p, crl::time now, bool paused) {
@@ -2484,11 +2478,6 @@ void PeerListContent::clearSelection() {
 }
 
 void PeerListContent::mouseLeftGeometry() {
-	// Mokagram: скрываем подсказку при выходе из списка.
-	if (!toolTip().isEmpty()) {
-		QToolTip::hideText();
-		setToolTip(QString());
-	}
 	if (_mouseSelection) {
 		setSelected(Selected());
 		_mouseSelection = false;
@@ -2777,7 +2766,6 @@ void PeerListContent::selectByMouse(QPoint globalPosition) {
 	const auto customMode = (_mode == Mode::Custom);
 	auto in = parentWidget()->rect().contains(parentWidget()->mapFromGlobal(globalPosition));
 	auto selected = Selected();
-	auto badgeTooltip = QString();
 	auto rowsPointY = point.y() - rowsTop();
 	selected.index.value = (!in || rowsPointY < 0)
 		? -1
@@ -2796,13 +2784,6 @@ void PeerListContent::selectByMouse(QPoint globalPosition) {
 					rowsPointY - (selected.index.value * _rowHeight)))) {
 			selected = Selected();
 		} else if (!customMode) {
-			const auto badge = row->leadingBadgeRect().translated(0, getRowTop(selected.index));
-			if (badge.contains(point) && !row->special()) {
-				const auto details = row->peer()->botVerifyDetails();
-				if (details && !details->botId && !details->description.empty()) {
-					badgeTooltip = u"<span>"_q + details->description.text.toHtmlEscaped() + u"</span>"_q;
-				}
-			}
 			for (auto i = 0, count = row->elementsCount(); i != count; ++i) {
 				const auto rect = getElementRect(row, selected.index, i + 1);
 				if (rect.contains(point)) {
@@ -2811,13 +2792,6 @@ void PeerListContent::selectByMouse(QPoint globalPosition) {
 				}
 			}
 		}
-	}
-	// Mokagram: подсказка привязана к значку, а не ко всей строке.
-	if (toolTip() != badgeTooltip) {
-		if (!toolTip().isEmpty()) {
-			QToolTip::hideText();
-		}
-		setToolTip(badgeTooltip);
 	}
 	setSelected(selected);
 }

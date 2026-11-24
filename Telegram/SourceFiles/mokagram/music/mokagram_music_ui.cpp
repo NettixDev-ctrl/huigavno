@@ -4366,16 +4366,28 @@ public:
 		return std::max(height() - style::ConvertScale(narrow ? 160 : 136), 0);
 	}
 
-	void setBannerTopInset(int inset) {
-		if (!_isArtist || _bannerTopInset == inset) return;
-		_bannerTopInset = inset;
+	void setArtistBannerGeometry(int fullWidth, int topInset) {
+		if (!_isArtist || (_bannerWidth == fullWidth && _bannerTopInset == topInset)) {
+			return;
+		}
+		_bannerWidth = fullWidth;
+		_bannerTopInset = topInset;
 		update();
 	}
 
 	void paintArtistBanner(QPainter &p, QPoint origin) {
-		if (prepareArtistBanner()) {
-			p.drawImage(origin - QPoint(0, _bannerTopInset), _scaledBanner);
+		if (!prepareArtistBanner()) {
+			return;
 		}
+		const auto s = [](int value) { return style::ConvertScale(value); };
+		const auto radius = s(BoxParts::kCardRadius);
+		const auto top = -_bannerTopInset - radius;
+		const auto background = artistBannerColor();
+		p.setPen(Qt::NoPen);
+		p.setBrush(background.isValid() ? background : st::windowBg->c);
+		p.drawRoundedRect(QRect(origin + QPoint(0, top), QSize(
+			_scaledBanner.width(), height() - s(8) - top)), radius, radius);
+		p.drawImage(origin - QPoint(0, _bannerTopInset), _scaledBanner);
 	}
 
 	[[nodiscard]] QColor artistBannerColor() {
@@ -4514,7 +4526,8 @@ private:
 		if (_banner.isNull()) return false;
 
 		const auto fadeHeight = style::ConvertScale(48);
-		const auto size = QSize(width(), artistBannerHeight() + _bannerTopInset + fadeHeight);
+		const auto size = QSize(std::max(width(), _bannerWidth),
+			artistBannerHeight() + _bannerTopInset + fadeHeight);
 		if (size.isEmpty()) return false;
 		if (_scaledBanner.size() == size) return true;
 
@@ -4551,14 +4564,9 @@ private:
 		const auto identityTop = artistBannerHeight();
 		auto titleColor = st::windowFg->c;
 		if (prepareArtistBanner()) {
-			const auto radius = s(BoxParts::kCardRadius);
-			const auto card = rect().adjusted(0, -radius, 0, -s(8));
+			paintArtistBanner(p, QPoint());
 			const auto bannerColor = artistBannerColor();
 			const auto background = bannerColor.isValid() ? bannerColor : st::windowBg->c;
-			p.setPen(Qt::NoPen);
-			p.setBrush(background);
-			p.drawRoundedRect(card, radius, radius);
-			p.drawImage(QPoint(0, -_bannerTopInset), _scaledBanner);
 			titleColor = Ui::CountContrast(background, Qt::white) >= Ui::CountContrast(background, Qt::black)
 				? QColor(Qt::white)
 				: QColor(Qt::black);
@@ -4651,6 +4659,7 @@ private:
 	int _avatarClicks = 0;
 	crl::time _lastAvatarClick = 0;
 	QString _bannerUrl;
+	int _bannerWidth = 0;
 	int _bannerTopInset = 0;
 	QImage _art;
 	QImage _scaledArt;
@@ -8038,7 +8047,7 @@ protected:
 			_searchEmptySticker->setGeometry(searchHintGeometry(layout));
 		}
 		_tabContent->resizeToWidth(_tabScroll->width());
-		if (_homeAlbumHeader) _homeAlbumHeader->setBannerTopInset(_tabScroll->y());
+		if (_homeAlbumHeader) _homeAlbumHeader->setArtistBannerGeometry(width(), _tabScroll->y());
 		updateHomeArtistBar();
 
 		// Навигация: ряд пилюль сверху по центру.
@@ -9428,7 +9437,7 @@ protected:
 						update();
 					})), QMargins(0, 0, 0, style::ConvertScale(8)));
 				_homeAlbumHeader = albumHeader;
-				albumHeader->setBannerTopInset(_tabScroll->y());
+				albumHeader->setArtistBannerGeometry(width(), _tabScroll->y());
 				albumHeader->setArtistPlayable(std::ranges::any_of(
 					HomeArtistPopular(_homeArtistTracks, _homeArtistYouTubeTracks),
 					CanPlayTrack));
@@ -10010,18 +10019,24 @@ protected:
 		} else if (artistHeader) {
 			const auto top = _tabScroll->y();
 			const auto offset = _tabScroll->scrollTop();
-			const auto bannerHeight = artistHeader->artistBannerHeight();
-			const auto bannerBottom = top + bannerHeight - offset;
+			const auto origin = QPoint(_tabScroll->x(), top - offset);
+			const auto bannerBottom = origin.y() + artistHeader->artistBannerHeight();
 			const auto visible = std::clamp(bannerBottom / double(std::max(top, 1)), 0., 1.);
-			const auto panel = QRect(_tabScroll->x(), 0, _tabScroll->width(), top);
+			const auto panel = QRect(0, 0, width(), top);
 			p.save();
 			p.setClipRect(panel, Qt::IntersectClip);
 			p.setOpacity(visible);
-			if (_homeAccent.isValid()) {
-				p.fillRect(panel, anim::color(st::boxBg->c, _homeAccent, 0.26));
-			}
-			artistHeader->paintArtistBanner(p, QPoint(_tabScroll->x(), top - offset));
+			artistHeader->paintArtistBanner(p, origin);
 			p.restore();
+
+			const auto right = _tabScroll->geometry().right() + 1;
+			if (right < width()) {
+				p.save();
+				p.setClipRect(QRect(right, top, width() - right, height() - top),
+					Qt::IntersectClip);
+				artistHeader->paintArtistBanner(p, origin);
+				p.restore();
+			}
 		}
 		if (_tab == Tab::Home && _homeAlbumOpen && !_homeArtistOpen) {
 			const auto headerWidth = std::max(_tabScroll->width() - s(24), 0);

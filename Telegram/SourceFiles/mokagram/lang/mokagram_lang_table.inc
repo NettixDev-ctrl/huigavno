@@ -1214,7 +1214,7 @@
 	{ "Выберите чат с музыкой", "Choose a chat with music" },
 	{ "Трек больше недоступен", "This track is no longer available" },
 	{ "Тянка хикка", "Tyanka Hikka" },
-	{ "Отрывки песни звучат при действиях в клиенте. Упоминание тянка хикка в отправленном сообщении запускает трек целиком.", "Play song clips as you use the app. Mention Tyanka Hikka in a message you send to play the full track." },
+	{ "Одно «ваф» при отправке сообщения и два «ваф» при входящем в открытом чате.", "Play one woof when you send a message and two when a message arrives in the open chat." },
 	{ "Тянка хикка включена. Аудиофайл не найден.", "Tyanka Hikka mode is on. The audio file is missing." },
 	{ "Режим «Тянка хикка» включён", "Tyanka Hikka mode is on" },
 	{ "Показать в чате", "Show in chat" },

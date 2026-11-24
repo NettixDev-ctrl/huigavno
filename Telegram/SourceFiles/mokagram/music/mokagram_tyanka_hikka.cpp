@@ -3,59 +3,40 @@
 // of MOKAGRAM_NOTICE.md (section 7(b)): keep this notice when copying.
 #include "mokagram/music/mokagram_tyanka_hikka.h"
 
-#include "base/random.h"
-#include "base/unixtime.h"
+#include "base/timer.h"
 #include "core/application.h"
 #include "core/core_settings.h"
-#include "core/file_location.h"
-#include "data/data_document.h"
-#include "data/data_session.h"
-#include "main/main_session.h"
-#include "media/audio/media_audio.h"
+#include "history/history_item.h"
 #include "media/audio/media_audio_track.h"
-#include "media/player/media_player_instance.h"
 #include "mokagram/lang/mokagram_lang.h"
 #include "mokagram/music/mokagram_soundcloud.h"
 #include "mokagram/settings/mokagram_settings.h"
 #include "settings.h"
-#include "storage/storage_account.h"
 #include "window/window_controller.h"
+#include "window/window_session_controller.h"
 
-#include <QtCore/QCoreApplication>
 #include <QtCore/QFile>
 #include <QtCore/QFileInfo>
 #include <QtCore/QRegularExpression>
 #include <QtCore/QSaveFile>
-#include <QtGui/QKeyEvent>
-#include <QtWidgets/QWidget>
 
 #include <array>
 
 namespace Mokagram::TyankaHikka {
 namespace {
 
-constexpr auto kSong = AudioMsgId::Type::Song;
-constexpr auto kDocumentId = DocumentId(0x4D4F4D0000000001ULL);
+constexpr auto kBarkGap = crl::time(110);
 
 struct ClipTiming {
 	crl::time start;
 	crl::time end;
 };
 
-// Phrase boundaries in milliseconds, aligned to the original recording.
-constexpr auto kClips = std::to_array<ClipTiming>({
-	{ 15140, 17700 },
-	{ 21560, 23380 },
-	{ 23580, 25480 },
-	{ 27580, 29460 },
-	{ 30620, 31380 },
-	{ 39420, 41320 },
-	{ 43320, 45140 },
-	{ 48400, 49560 },
-	{ 50960, 51500 },
-	{ 52420, 53640 },
-	{ 55120, 55480 },
-	{ 91240, 93080 },
+// Single barks in the original recording, in milliseconds.
+constexpr auto kBarks = std::to_array<ClipTiming>({
+	{ 48730, 49010 },
+	{ 50720, 50970 },
+	{ 55180, 55490 },
 });
 
 [[nodiscard]] QString SettingKey() {
@@ -87,27 +68,23 @@ constexpr auto kClips = std::to_array<ClipTiming>({
 	return result;
 }
 
-[[nodiscard]] bool IsCurrentSong() {
-	const auto current = Media::Player::instance()->current(kSong);
-	const auto document = current.audio();
-	return document && document->id == kDocumentId;
-}
-
 void RegisterSetting(bool unlocked) {
 	Settings::Register({
 		.key = SettingKey(),
 		.section = QString::fromUtf8(Lang::Tr("Плеер")),
 		.title = QString::fromUtf8(Lang::Tr("Тянка хикка")),
-		.description = QString::fromUtf8(Lang::Tr("Отрывки песни звучат при действиях в клиенте. Упоминание тянка хикка в отправленном сообщении запускает трек целиком.")),
+		.description = QString::fromUtf8(Lang::Tr("Одно «ваф» при отправке сообщения и два «ваф» при входящем в открытом чате.")),
 		.category = u"look"_q,
 		.sectionIcon = u"hide"_q,
 		.hidden = !unlocked,
 	});
 }
 
-class Mode final : public QObject {
+class Mode final {
 public:
-	Mode() : _unlocked(QFile::exists(UnlockPath())) {
+	Mode()
+	: _unlocked(QFile::exists(UnlockPath()))
+	, _nextBarkTimer([this] { playNextBark(); }) {
 		RegisterSetting(_unlocked);
 		Settings::BoolValue(SettingKey()) | rpl::on_next([this](bool enabled) {
 			setEnabled(_unlocked && enabled);
@@ -134,108 +111,68 @@ public:
 		}
 	}
 
-	void playForMessage(not_null<Main::Session*> session, const QString &text) {
-		if (!_enabled || !ArtistPattern().match(text).hasMatch()) {
+	void enqueueBarks(int count) {
+		if (!_enabled || !Core::App().settings().notificationsVolume()) {
 			return;
 		}
-		if (_path.isEmpty() || !QFile::exists(_path)) {
-			_path = TrackPath();
-			if (_path.isEmpty()) {
-				return;
-			}
+		_pendingBarks += count;
+		if (!_nextBarkTimer.isActive()) {
+			playNextBark();
 		}
-
-		_clip.reset();
-		const auto document = session->data().document(
-			kDocumentId,
-			0,
-			QByteArray(),
-			base::unixtime::now(),
-			{ MTP_documentAttributeAudio(
-				MTP_flags(MTPDdocumentAttributeAudio::Flag::f_title
-					| MTPDdocumentAttributeAudio::Flag::f_performer),
-				MTP_int(148),
-				MTP_string(u"тянка хикка - АХЕГАО (prod. Aki)"_q),
-				MTP_string(u"tyankahikka"_q),
-				MTPstring()) },
-			u"audio/mp4"_q,
-			InlineImageLocation(),
-			ImageWithLocation(),
-			ImageWithLocation(),
-			false,
-			0,
-			QFileInfo(_path).size());
-		document->setLocation(Core::FileLocation(_path));
-		session->local().setMediaLastPlaybackPosition(kDocumentId, 0);
-		Media::Player::instance()->play(AudioMsgId(document, FullMsgId()), std::nullopt);
-	}
-
-protected:
-	bool eventFilter(QObject *watched, QEvent *event) override {
-		if (!event->spontaneous()
-			|| !watched->isWidgetType()
-			|| _path.isEmpty()) {
-			return false;
-		}
-		const auto type = event->type();
-		if (type == QEvent::MouseButtonRelease
-			|| type == QEvent::Wheel
-			|| (type == QEvent::KeyPress
-				&& !static_cast<QKeyEvent*>(event)->isAutoRepeat())) {
-			playClip();
-		}
-		return false;
 	}
 
 private:
 	void setEnabled(bool enabled) {
-		if (_enabled == enabled) {
-			return;
-		}
 		_enabled = enabled;
-		const auto app = QCoreApplication::instance();
 		if (enabled) {
 			_path = TrackPath();
-			_lastClip = -1;
-			app->installEventFilter(this);
 		} else {
-			app->removeEventFilter(this);
-			_clip.reset();
-			if (IsCurrentSong()) {
-				Media::Player::instance()->stop(kSong);
-			}
+			_nextBarkTimer.cancel();
+			_pendingBarks = 0;
+			_nextBark = 0;
+			_barks = {};
+			_path.clear();
 		}
 	}
 
-	void playClip() {
-		if (_path.isEmpty()
-			|| !Core::App().settings().notificationsVolume()
-			|| (_clip && _clip->isActive())) {
+	void playNextBark() {
+		if (!_pendingBarks || !Core::App().settings().notificationsVolume()) {
+			_pendingBarks = 0;
 			return;
 		}
-		if (IsCurrentSong()) {
-			const auto state = Media::Player::instance()->getState(kSong).state;
-			if (!Media::Player::IsStoppedOrStopping(state)
-				&& !Media::Player::IsPausedOrPausing(state)) {
+		if (_path.isEmpty()) {
+			_path = TrackPath();
+			if (_path.isEmpty()) {
+				_pendingBarks = 0;
 				return;
 			}
 		}
-		auto index = base::RandomIndex(int(kClips.size()) - (_lastClip >= 0 ? 1 : 0));
-		if (_lastClip >= 0 && index >= _lastClip) {
-			++index;
+
+		auto &bark = _barks[_nextBark];
+		if (!bark) {
+			const auto timing = kBarks[_nextBark];
+			bark = Media::Audio::Current().createTrack();
+			bark->fillFromFile(_path, timing.start, timing.end - timing.start);
+			if (bark->failed()) {
+				bark.reset();
+				_path.clear();
+				_pendingBarks = 0;
+				return;
+			}
 		}
-		_lastClip = index;
-		const auto clip = kClips[index];
-		_clip = Media::Audio::Current().createTrack();
-		_clip->fillFromFile(_path, clip.start, clip.end - clip.start);
-		_clip->playOnce();
+		--_pendingBarks;
+		_nextBark = (_nextBark + 1) % kBarks.size();
+		bark->playOnce();
+		_nextBarkTimer.callOnce(bark->getLengthMs() + kBarkGap);
 	}
 
 	bool _unlocked = false;
 	bool _enabled = false;
 	QString _path;
-	int _lastClip = -1;
-	std::unique_ptr<Media::Audio::Track> _clip;
+	int _pendingBarks = 0;
+	size_t _nextBark = 0;
+	std::array<std::unique_ptr<Media::Audio::Track>, kBarks.size()> _barks;
+	base::Timer _nextBarkTimer;
 	rpl::lifetime _lifetime;
 };
 
@@ -263,9 +200,29 @@ void Unlock() {
 	}
 }
 
-void OnOwnMessage(not_null<Main::Session*> session, const QString &text) {
+void OnOwnMessage() {
 	if (Instance) {
-		Instance->playForMessage(session, text);
+		Instance->enqueueBarks(1);
+	}
+}
+
+void OnIncomingMessage(not_null<HistoryItem*> item) {
+	if (!Instance || item->out() || !item->isRegular() || item->isService()) {
+		return;
+	}
+	const auto window = Core::App().activeWindow();
+	if (!window || window->locked() || !window->widget()->isActiveWindow()) {
+		return;
+	}
+	const auto controller = window->sessionController();
+	if (!controller) {
+		return;
+	}
+	const auto chat = controller->activeChatCurrent();
+	if (chat.owningHistory() == item->history()
+		&& (!chat.topic() || chat.topic() == item->topic())
+		&& (!chat.sublist() || chat.sublist() == item->savedSublist())) {
+		Instance->enqueueBarks(2);
 	}
 }
 

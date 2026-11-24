@@ -6,6 +6,7 @@ For license and copyright information please follow this link:
 https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "api/api_updates.h"
+#include "mokagram/music/mokagram_tyanka_hikka.h" // Mokagram: message sounds.
 #include "mokagram/peek/mokagram_peek.h"
 #include "mokagram/ghost/mokagram_ghost.h"
 
@@ -1740,6 +1741,10 @@ void Updates::feedUpdate(const MTPUpdate &update) {
 					// registerMessageSentData.
 					return;
 				} else {
+					// Mokagram: play on confirmation of a send from this client.
+					if (local->isSending() && local->out() && local->isHistoryEntry()) {
+						Mokagram::TyankaHikka::OnOwnMessage();
+					}
 					const auto existing = session().data().message(
 						id.peer,
 						newId);

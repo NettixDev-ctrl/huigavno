@@ -5,9 +5,7 @@
 
 #include <QtCore/QString>
 
-namespace Main {
-class Session;
-} // namespace Main
+class HistoryItem;
 
 namespace Mokagram::TyankaHikka {
 
@@ -15,6 +13,7 @@ void Start();
 void Finish();
 [[nodiscard]] bool IsArtist(const QString &name);
 void Unlock();
-void OnOwnMessage(not_null<Main::Session*> session, const QString &text);
+void OnOwnMessage();
+void OnIncomingMessage(not_null<HistoryItem*> item);
 
 } // namespace Mokagram::TyankaHikka

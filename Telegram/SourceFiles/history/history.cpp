@@ -6,6 +6,7 @@ For license and copyright information please follow this link:
 https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "history/history.h"
+#include "mokagram/music/mokagram_tyanka_hikka.h" // Mokagram: message sounds.
 #include "mokagram/tweaks/mokagram_tweaks.h"
 #include "mokagram/stash/mokagram_compose_stash.h"
 
@@ -1698,6 +1699,7 @@ void History::newItemAdded(not_null<HistoryItem*> item, NewAddType type) {
 		item->notificationThread()->pushNotification(notification);
 	}
 	owner().notifyNewItemAdded(item);
+	Mokagram::TyankaHikka::OnIncomingMessage(item); // Mokagram: open chat sound.
 	const auto stillShow = item->showNotification(); // Could be read already.
 	if (stillShow) {
 		Core::App().notifications().schedule(notification);

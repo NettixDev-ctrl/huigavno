@@ -8940,20 +8940,31 @@ protected:
 		if (_homeArtistOpen && !_homeArtistSeed.id.isEmpty()) {
 			_homeArtistTracks.push_back(_homeArtistSeed);
 		}
+		const auto artistPage = _homeArtistOpen;
 		const auto searchAlbums = [=] {
 			if (name.isEmpty()) return;
-			SearchAlbums(name, 20, crl::guard(this, [=](std::vector<Album> albums, QString) {
+			SearchAlbums(name, 50, crl::guard(this, [=](std::vector<Album> albums, QString) {
 				if (generation != _homeAlbumGeneration) {
 					return;
 				}
-				const auto artist = name.trimmed().toCaseFolded();
-				auto found = std::set<QString>();
+				const auto artist = name.simplified().toCaseFolded();
 				for (auto &album : albums) {
-					const auto matches = !artistId.isEmpty() && artistId != u"0"_q
-						&& !album.artistId.isEmpty() && album.artistId != u"0"_q
-						? artistId == album.artistId
-						: album.artist.trimmed().toCaseFolded() == artist;
-					if (matches && album.id != albumId && found.insert(album.id).second) {
+					const auto matchesId = !artistId.isEmpty() && artistId != u"0"_q
+						&& artistId == album.artistId;
+					const auto matchesName = album.artist.simplified().toCaseFolded() == artist;
+					if ((!matchesId && !matchesName) || album.id == albumId
+						|| (artistPage && album.releaseKind == ReleaseKind::Unknown)) {
+						continue;
+					}
+					const auto duplicate = std::ranges::any_of(_homeArtistAlbums, [&](const Album &other) {
+						return other.id == album.id || (artistPage
+							&& other.releaseKind == album.releaseKind
+							&& other.title.simplified().compare(album.title.simplified(),
+								Qt::CaseInsensitive) == 0
+							&& (other.releaseYear == album.releaseYear
+								|| !other.releaseYear || !album.releaseYear));
+					});
+					if (!duplicate) {
 						_homeArtistAlbums.push_back(std::move(album));
 					}
 				}
@@ -8962,17 +8973,14 @@ protected:
 				}
 			}));
 		};
-		if (_homeArtistOpen && !artistId.isEmpty()) {
+		if (artistPage && !artistId.isEmpty()) {
 			LoadArtistAlbums(artistId, crl::guard(this, [=](std::vector<Album> albums) {
 				if (generation != _homeAlbumGeneration) {
 					return;
 				}
-				if (albums.empty()) {
-					searchAlbums();
-					return;
-				}
 				_homeArtistAlbums = std::move(albums);
-				if (_tab == Tab::Home) rebuildTab();
+				if (_tab == Tab::Home && !_homeArtistAlbums.empty()) rebuildTab();
+				searchAlbums();
 			}));
 		} else {
 			searchAlbums();

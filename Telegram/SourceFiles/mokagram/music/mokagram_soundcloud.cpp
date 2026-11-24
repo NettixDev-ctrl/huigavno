@@ -11,6 +11,9 @@
 #include "core/application.h"
 #include "rpl/event_stream.h"
 
+#include <crl/crl.h>
+#include <crl/crl_queue.h>
+
 #include <QtCore/QCoreApplication>
 #include <QtCore/QCryptographicHash>
 #include <QtCore/QDateTime>
@@ -608,6 +611,32 @@ void InsertArtistInfo(const QString &id, ArtistInfo info) {
 	return {};
 }
 
+crl::queue &AudioCacheWorker() {
+	static const auto result = new crl::queue();
+	return *result;
+}
+
+// Worker-owned leases keep files alive until their main-thread consumers run.
+std::map<QString, int> &PendingAudioFiles() {
+	static auto result = std::map<QString, int>();
+	return result;
+}
+
+void PostAudioFileResult(QString path, QString error, AudioFileDone done) {
+	if (!path.isEmpty()) ++PendingAudioFiles()[path];
+	crl::on_main([path = std::move(path), error = std::move(error),
+			done = std::move(done)] {
+		done(path, error);
+		if (!path.isEmpty()) {
+			AudioCacheWorker().async([path] {
+				auto &pending = PendingAudioFiles();
+				const auto i = pending.find(path);
+				if (--i->second == 0) pending.erase(i);
+			});
+		}
+	});
+}
+
 // Отмечаем file как недавно использованный: mtime служит ключом LRU.
 void TouchCacheFile(const QString &path) {
 	QFile file(path);
@@ -623,10 +652,20 @@ void TrimAudioCache(const QString &protectPath) {
 	const auto dir = QDir(CacheDir());
 	const auto files = dir.entryInfoList(
 		{ u"*.m4a"_q, u"*.mp3"_q, u"yt-*.webm"_q }, QDir::Files, QDir::Time);
-	auto total = QFileInfo(protectPath).size();
-	auto count = 1;
+	auto total = qint64(0);
+	auto count = 0;
+	const auto protectedFile = [&](const QFileInfo &file) {
+		return file.absoluteFilePath() == protectPath
+			|| PendingAudioFiles().contains(file.absoluteFilePath());
+	};
 	for (const auto &file : files) {
-		if (file.absoluteFilePath() == protectPath) {
+		if (protectedFile(file)) {
+			total += file.size();
+			++count;
+		}
+	}
+	for (const auto &file : files) {
+		if (protectedFile(file)) {
 			continue;
 		}
 		if (count < kAudioCacheFiles
@@ -640,21 +679,26 @@ void TrimAudioCache(const QString &protectPath) {
 }
 
 void FinishFile(
-		const QString &path,
-		const std::vector<QByteArray> &parts,
-		Fn<void(const QString &, const QString &)> done) {
-	QDir().mkpath(CacheDir());
-	auto file = QSaveFile(path);
-	if (file.open(QIODevice::WriteOnly)) {
-		const auto written = std::all_of(parts.begin(), parts.end(), [&](const QByteArray &part) {
-			return file.write(part) == part.size();
-		});
-		if (written && file.commit()) {
-			done(path, QString());
-			return;
+		QString path,
+		std::vector<QByteArray> parts,
+		AudioFileDone done) {
+	AudioCacheWorker().async([path = std::move(path), parts = std::move(parts),
+			done = std::move(done)] {
+		QDir().mkpath(QFileInfo(path).absolutePath());
+		auto file = QSaveFile(path);
+		if (file.open(QIODevice::WriteOnly)) {
+			const auto written = std::all_of(parts.begin(), parts.end(), [&](const QByteArray &part) {
+				return file.write(part) == part.size();
+			});
+			if (written && file.commit()) {
+				PostAudioFileResult(path, {}, done);
+				return;
+			}
 		}
-	}
-	done({}, QString::fromUtf8(Mokagram::Lang::Tr("не удалось записать файл")));
+		crl::on_main([done] {
+			done({}, QString::fromUtf8(Mokagram::Lang::Tr("не удалось записать файл")));
+		});
+	});
 }
 
 struct HlsDownload {
@@ -686,7 +730,7 @@ void DownloadHlsSegment(const std::shared_ptr<HlsDownload> &job) {
 		}
 		job->parts[index] = std::move(part);
 		if (++job->received == job->urls.size()) {
-			FinishFile(job->path, job->parts, std::exchange(job->done, {}));
+			FinishFile(job->path, std::move(job->parts), std::exchange(job->done, {}));
 		} else if (job->next < job->urls.size()) {
 			DownloadHlsSegment(job);
 		}
@@ -1657,23 +1701,35 @@ void LoadCachedAudio(
 		const QString &cachedPath,
 		Fn<void(AudioFileDone)> load,
 		AudioFileDone done) {
-	const auto cached = QFileInfo(cachedPath);
-	if (cached.isFile() && cached.size() > 0) {
-		TouchCacheFile(cachedPath);
-		done(cachedPath, {});
-		return;
-	}
+	// Coalesce cache checks as well as downloads; all filesystem work is ordered.
 	static auto loading = std::map<QString, std::vector<AudioFileDone>>();
 	const auto [entry, started] = loading.try_emplace(key);
 	entry->second.push_back(std::move(done));
 	if (!started) return;
-	load([key](const QString &path, const QString &error) {
-		if (!path.isEmpty() && error.isEmpty()) {
-			TouchCacheFile(path);
-			TrimAudioCache(path);
-		}
+	const auto finish = [key](const QString &path, const QString &error) {
 		const auto result = loading.extract(key);
 		for (const auto &callback : result.mapped()) callback(path, error);
+	};
+	AudioCacheWorker().async([cachedPath, load = std::move(load), finish] {
+		const auto cached = QFileInfo(cachedPath);
+		if (cached.isFile() && cached.size() > 0) {
+			TouchCacheFile(cachedPath);
+			PostAudioFileResult(cachedPath, {}, finish);
+			return;
+		}
+		crl::on_main([load, finish] {
+			load([finish](const QString &path, const QString &error) {
+				if (path.isEmpty() || !error.isEmpty()) {
+					finish(path, error);
+					return;
+				}
+				AudioCacheWorker().async([path, finish] {
+					TouchCacheFile(path);
+					TrimAudioCache(path);
+					PostAudioFileResult(path, {}, finish);
+				});
+			});
+		});
 	});
 }
 
@@ -1748,14 +1804,16 @@ void DownloadStream(const Track &track, AudioFileDone done) {
 		}
 		const auto reply = Get(QUrl(url), kMaxAudioBytes);
 		QObject::connect(reply, &QNetworkReply::finished, [=] {
-			const auto bytes = reply->readAll();
+			auto bytes = reply->readAll();
 			const auto failed = (reply->error() != QNetworkReply::NoError);
 			reply->deleteLater();
 			if (failed || bytes.isEmpty()) {
 				done({}, QString::fromUtf8(Mokagram::Lang::Tr("сбой загрузки трека")));
 				return;
 			}
-			FinishFile(path, { bytes }, done);
+			auto parts = std::vector<QByteArray>();
+			parts.push_back(std::move(bytes));
+			FinishFile(path, std::move(parts), done);
 		});
 	});
 }

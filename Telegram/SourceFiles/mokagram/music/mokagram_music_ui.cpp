@@ -8019,10 +8019,16 @@ protected:
 		_tabScroll->setVisible(_tab != Tab::Now || (showsQueue() && !_queuePanelOpen));
 		layoutQueuePanel(layout.queuePanel);
 		const auto home = (_tab == Tab::Home);
-		const auto scrollBottom = home ? height() : layout.center.bottom() + 1 - s(12);
+		const auto artistPage = home && _homeArtistOpen;
+		const auto scrollBehindBar = home && !artistPage;
+		const auto scrollBottom = scrollBehindBar
+			? height()
+			: (artistPage ? layout.contentBottom : layout.center.bottom() + 1 - s(12));
 		// Последнюю карточку можно прокрутить целиком выше плеера.
-		_tabContent->setPadding(QMargins(
-			0, 0, 0, home && _hasPlaybackTrack ? height() - layout.contentBottom : 0));
+		const auto bottomPadding = scrollBehindBar && _hasPlaybackTrack
+			? height() - layout.contentBottom
+			: 0;
+		_tabContent->setPadding(QMargins(0, 0, 0, bottomPadding));
 		_tabScroll->setGeometry(
 			layout.center.x(),
 			layout.scrollTop,

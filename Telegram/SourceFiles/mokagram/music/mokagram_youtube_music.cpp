@@ -603,10 +603,11 @@ private:
 		}
 		const auto id = endpoint.value("browseId").toString();
 		const auto params = endpoint.value("params").toString();
+		const auto sectionArtist = id.startsWith(u"MPAD"_q) ? id.mid(4) : id;
 		static const auto playlist = QRegularExpression(u"^VL[A-Za-z0-9_-]+$"_q);
 		if ((page.kind == NativePageKind::Songs && !playlist.match(id).hasMatch())
 			|| (page.kind == NativePageKind::Releases
-				&& (!IsArtistBrowseId(id) || params.isEmpty()))) {
+				&& (!IsArtistBrowseId(sectionArtist) || params.isEmpty()))) {
 			_error = u"YouTube Music returned an invalid catalog browse endpoint."_q;
 			return;
 		}
@@ -771,6 +772,7 @@ private:
 				} else {
 					continue;
 				}
+				endpoint(title, section);
 				for (const auto &run : title.value("runs").toArray()) endpoint(run.toObject(), section);
 				endpoint(shelf.value("bottomEndpoint").toObject(), section);
 				endpoint(carousel.value("moreContentButton").toObject().value("buttonRenderer").toObject(), section);

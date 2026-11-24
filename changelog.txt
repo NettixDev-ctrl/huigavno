@@ -4,6 +4,7 @@ mokaGram (24.11.26)
 - Cache Retina artwork and island geometry, reuse queue rows and index lyrics.
 - Move music persistence, artwork decoding and cache maintenance off the UI thread.
 - Release completed recommendation and sync state; pause hidden Canvas playback.
+- Open search albums in the full album page and preserve search position on return.
 
 7.4.4 (13.11.26)
 

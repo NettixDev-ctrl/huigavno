@@ -120,6 +120,47 @@ constexpr auto kRetryDelay = 1500;
 	return result;
 }
 
+[[nodiscard]] Lyrics ParseYrc(const QString &text) {
+	static const auto stamp = QRegularExpression(uR"(^\[(\d{1,8}),(\d{1,8})\])"_q);
+	static const auto wordStamp = QRegularExpression(uR"(\((\d{1,8}),(\d{1,8}),-?\d+\))"_q);
+	auto result = Lyrics();
+	for (const auto &raw : text.split('\n')) {
+		const auto timing = stamp.match(raw);
+		if (!timing.hasMatch()) {
+			continue;
+		}
+		auto line = LyricLine{ timing.captured(1).toLongLong() };
+		auto matches = wordStamp.globalMatch(raw, timing.capturedEnd());
+		while (matches.hasNext()) {
+			const auto match = matches.next();
+			const auto end = matches.hasNext()
+				? matches.peekNext().capturedStart()
+				: raw.size();
+			const auto part = raw.mid(match.capturedEnd(), end - match.capturedEnd());
+			const auto content = part.trimmed();
+			if (!content.isEmpty()) {
+				const auto from = int(line.text.size() + part.indexOf(content));
+				const auto start = match.captured(1).toLongLong();
+				const auto duration = match.captured(2).toLongLong();
+				if (duration > 0 && start >= line.timeMs
+					&& (line.words.empty() || start >= line.words.back().endMs)) {
+					line.words.push_back({ start, start + duration, from,
+						from + int(content.size()) });
+				}
+			}
+			line.text += part;
+		}
+		if (!line.words.empty()) {
+			result.lines.push_back(std::move(line));
+		}
+	}
+	std::stable_sort(result.lines.begin(), result.lines.end(), [](const auto &a, const auto &b) {
+		return a.timeMs < b.timeMs;
+	});
+	result.synced = result.found = !result.lines.empty();
+	return result;
+}
+
 // Версии speed up и slowed идут быстрее или медленнее оригинала: метки времени
 // растягиваем во столько же раз, во сколько отличается длина трека.
 // Растягиваем метки, только если версия реально другой скорости.
@@ -139,6 +180,10 @@ void ScaleTimes(Lyrics &lyrics, double ratio) {
 	}
 	for (auto &line : lyrics.lines) {
 		line.timeMs = qint64(line.timeMs * ratio);
+		for (auto &word : line.words) {
+			word.startMs = qint64(word.startMs * ratio);
+			word.endMs = std::max(word.startMs + 1, qint64(word.endMs * ratio));
+		}
 	}
 }
 
@@ -587,11 +632,15 @@ void RequestNeteaseCandidate(
 	}
 	const auto candidate = candidates[index];
 	GetJson(
-		u"https://music.163.com/api/song/lyric?lv=1&kv=1&tv=-1&id="_q
+		u"https://music.163.com/api/song/lyric?lv=1&kv=1&tv=-1&yv=-1&id="_q
 			+ QString::number(candidate.id),
 		[=](QJsonDocument lyric) {
 			const auto text = lyric.object().value("lrc").toObject().value("lyric").toString();
-			auto result = text.isEmpty() ? Lyrics() : ParseLrc(text);
+			auto result = ParseYrc(lyric.object().value("yrc")
+				.toObject().value("lyric").toString());
+			if (!result.found && !text.isEmpty()) {
+				result = ParseLrc(text);
+			}
 			// Служебные строки с авторами (作词, 作曲...) не показываем.
 			static const auto credits = QRegularExpression(
 				uR"(^\s*(作词|作曲|编曲|制作|作詞|编曲|词|曲|Lyrics|Music|Composer|Producer|Arranger)\s*[:：])"_q,

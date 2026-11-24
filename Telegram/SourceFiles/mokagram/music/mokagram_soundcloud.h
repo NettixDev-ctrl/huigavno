@@ -78,7 +78,7 @@ void LoadRelatedPage(
 	const QString &cursor,
 	Fn<void(RelatedPage)> done);
 
-// Последние треки исполнителя.
+// Треки исполнителя SoundCloud. limit <= 0 загружает все страницы каталога.
 void UserTracks(
 	const QString &userId,
 	int limit,
@@ -86,6 +86,7 @@ void UserTracks(
 	bool includeUnavailable = false);
 
 struct ArtistInfo {
+	// Числовой SoundCloud id или yt:UC... для родного профиля YouTube Music.
 	QString id;
 	QString name;
 	QString avatarUrl;
@@ -158,7 +159,7 @@ void TrackAlbums(
 	const QString &trackId,
 	Fn<void(std::vector<Album>)> done);
 
-// Треки альбома по порядку: недостающие в ответе подгружаются отдельно по id.
+// Треки альбома по порядку: числовой id SoundCloud или yt:... YouTube Music.
 void AlbumTracks(
 	const QString &albumId,
 	Fn<void(std::vector<Track>, QString error)> done);

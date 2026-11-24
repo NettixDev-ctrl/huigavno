@@ -261,7 +261,7 @@ void Members::setupList() {
 	static const auto listSt = [] {
 		auto result = st::infoMembersList;
 		result.item.button.textBg = st::windowBgOver;
-		result.item.button.textBgOver = st::windowBgOver;
+		result.item.button.textBgOver = st::windowBg;
 		return result;
 	}();
 	_listController->setStyleOverrides(&listSt);
@@ -269,8 +269,8 @@ void Members::setupList() {
 	_list = object_ptr<ListWidget>(
 		this,
 		_listController.get());
-	// Mokagram: подложка под участниками цвета карточки секции (#3a3a3c).
-	_list->setRoundedRows(false);
+	// Mokagram: выделяем строку отдельной скруглённой плашкой.
+	_list->setRoundedRows(true);
 	_list->scrollToRequests(
 	) | rpl::on_next([this](Ui::ScrollToRequest request) {
 		auto addmin = (request.ymin < 0 || !_header)

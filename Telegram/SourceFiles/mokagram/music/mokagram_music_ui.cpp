@@ -4409,16 +4409,28 @@ public:
 		return std::max(height() - style::ConvertScale(narrow ? 160 : 136), 0);
 	}
 
-	void setBannerTopInset(int inset) {
-		if (!_isArtist || _bannerTopInset == inset) return;
-		_bannerTopInset = inset;
+	void setArtistBannerGeometry(int fullWidth, int topInset) {
+		if (!_isArtist || (_bannerWidth == fullWidth && _bannerTopInset == topInset)) {
+			return;
+		}
+		_bannerWidth = fullWidth;
+		_bannerTopInset = topInset;
 		update();
 	}
 
 	void paintArtistBanner(QPainter &p, QPoint origin) {
-		if (prepareArtistBanner()) {
-			p.drawImage(origin - QPoint(0, _bannerTopInset), _scaledBanner);
+		if (!prepareArtistBanner()) {
+			return;
 		}
+		const auto s = [](int value) { return style::ConvertScale(value); };
+		const auto radius = s(BoxParts::kCardRadius);
+		const auto top = -_bannerTopInset - radius;
+		const auto background = artistBannerColor();
+		p.setPen(Qt::NoPen);
+		p.setBrush(background.isValid() ? background : st::windowBg->c);
+		p.drawRoundedRect(QRect(origin + QPoint(0, top), QSize(
+			_scaledBanner.width(), height() - s(8) - top)), radius, radius);
+		p.drawImage(origin - QPoint(0, _bannerTopInset), _scaledBanner);
 	}
 
 	[[nodiscard]] QColor artistBannerColor() {
@@ -4557,7 +4569,8 @@ private:
 		if (_banner.isNull()) return false;
 
 		const auto fadeHeight = style::ConvertScale(48);
-		const auto size = QSize(width(), artistBannerHeight() + _bannerTopInset + fadeHeight);
+		const auto size = QSize(std::max(width(), _bannerWidth),
+			artistBannerHeight() + _bannerTopInset + fadeHeight);
 		if (size.isEmpty()) return false;
 		if (_scaledBanner.size() == size) return true;
 
@@ -4594,14 +4607,9 @@ private:
 		const auto identityTop = artistBannerHeight();
 		auto titleColor = st::windowFg->c;
 		if (prepareArtistBanner()) {
-			const auto radius = s(BoxParts::kCardRadius);
-			const auto card = rect().adjusted(0, -radius, 0, -s(8));
+			paintArtistBanner(p, QPoint());
 			const auto bannerColor = artistBannerColor();
 			const auto background = bannerColor.isValid() ? bannerColor : st::windowBg->c;
-			p.setPen(Qt::NoPen);
-			p.setBrush(background);
-			p.drawRoundedRect(card, radius, radius);
-			p.drawImage(QPoint(0, -_bannerTopInset), _scaledBanner);
 			titleColor = Ui::CountContrast(background, Qt::white) >= Ui::CountContrast(background, Qt::black)
 				? QColor(Qt::white)
 				: QColor(Qt::black);
@@ -4694,6 +4702,7 @@ private:
 	int _avatarClicks = 0;
 	crl::time _lastAvatarClick = 0;
 	QString _bannerUrl;
+	int _bannerWidth = 0;
 	int _bannerTopInset = 0;
 	QImage _art;
 	QImage _scaledArt;
@@ -7874,10 +7883,18 @@ protected:
 		const auto gap = s(12);
 		const auto pad = s(16);
 		const auto now = (_tab == Tab::Now);
+		const auto queueWidth = std::min(
+			std::max(width() - 2 * margin, 0),
+			std::clamp(width() / 4, s(280), s(360)));
+		const auto queueProgress = queuePanelDocked()
+			? _queueSlide.value(_queuePanelOpen ? 1. : 0.)
+			: 0.;
+		const auto mainWidth = width()
+			- int(base::SafeRound((queueWidth + gap) * queueProgress));
 		// Толстая капсула как у островка: по центру, не на всю ширину.
 		const auto barHeight = s(kBarHeight);
 		const auto barWidth = std::max(
-			std::min(width() - 2 * margin, s(kBarMaxWidth)),
+			std::min(mainWidth - 2 * margin, s(kBarMaxWidth)),
 			0);
 		const auto barProgress = _barSlide.value(_hasPlaybackTrack ? 1. : 0.);
 		result.barShown = _hasPlaybackTrack || barProgress > 0.;
@@ -7885,23 +7902,23 @@ protected:
 		result.contentBottom = height() - gap
 			- (_hasPlaybackTrack ? margin + barHeight : 0);
 		result.bar = QRect(
-			(width() - barWidth) / 2,
+			(mainWidth - barWidth) / 2,
 			height() - int(base::SafeRound((margin + barHeight) * barProgress)),
 			barWidth,
 			barHeight);
 
-		// Сверху ряд вкладок по центру экрана, справа кнопка «свернуть».
+		// Сверху ряд вкладок по центру основной области, справа кнопка «свернуть».
 		const auto homeDetail = (_tab == Tab::Home && _homeAlbumOpen);
 		const auto back = QRect(s(24) + _filter->width(), margin, s(96), s(40));
 		const auto reserve = margin + _collapse->width() + s(8);
 		const auto leftReserve = homeDetail ? back.x() + back.width() + s(8) : reserve;
-		const auto tabsBelow = homeDetail && (width() - leftReserve - reserve < s(240));
+		const auto tabsBelow = homeDetail && (mainWidth - leftReserve - reserve < s(240));
 		const auto navLeft = tabsBelow ? margin : leftReserve;
 		const auto navRight = tabsBelow ? margin : reserve;
-		const auto navWidth = std::clamp(width() - navLeft - navRight, 0, s(900));
+		const auto navWidth = std::clamp(mainWidth - navLeft - navRight, 0, s(900));
 		result.verticalNav = width() < s(720) || (homeDetail && navWidth < s(540));
 		result.nav = QRect(
-			std::max((width() - navWidth) / 2, navLeft),
+			std::max((mainWidth - navWidth) / 2, navLeft),
 			tabsBelow ? margin + s(40) + gap : margin,
 			navWidth,
 			s(result.verticalNav ? 80 : 40));
@@ -7914,18 +7931,7 @@ protected:
 		const auto top = result.nav.y() + result.nav.height() + gap;
 		const auto areaBottom = result.contentBottom;
 		const auto areaHeight = std::max(areaBottom - top, 0);
-		const auto queueWidth = std::min(
-			std::max(width() - 2 * margin, 0),
-			std::clamp(width() / 4, s(280), s(360)));
 		result.queuePanel = QRect(width() - margin - queueWidth, top, queueWidth, areaHeight);
-		const auto queueProgress = _queueSlide.value(_queuePanelOpen ? 1. : 0.);
-		const auto contentMargin = (_tab == Tab::Home && _homeArtistOpen)
-			? 0
-			: margin;
-		const auto queueInset = queuePanelDocked() && !result.queuePanel.isEmpty()
-			? int(base::SafeRound((queueWidth + gap + margin - contentMargin) * queueProgress))
-			: 0;
-		const auto mainWidth = width() - queueInset;
 
 		if (now) {
 			auto lyricsLeft = margin;
@@ -7969,7 +7975,14 @@ protected:
 				result.scrollTop = result.center.y();
 			}
 		} else {
-			const auto contentWidth = std::max(mainWidth - 2 * contentMargin, 0);
+			const auto contentMargin = (_tab == Tab::Home && _homeArtistOpen)
+				? 0
+				: margin;
+			const auto queueEdgeInset = int(base::SafeRound(
+				(margin - contentMargin) * queueProgress));
+			const auto contentWidth = std::max(
+				mainWidth - 2 * contentMargin - queueEdgeInset,
+				0);
 			result.center = QRect(contentMargin, top, contentWidth, areaHeight);
 			result.scrollTop = result.center.y()
 				+ (_tab == Tab::Search ? searchHeaderHeight(contentWidth) : 0);
@@ -8147,10 +8160,16 @@ protected:
 		_tabScroll->setVisible(_tab != Tab::Now || (showsQueue() && !_queuePanelOpen));
 		layoutQueuePanel(layout.queuePanel);
 		const auto home = (_tab == Tab::Home);
-		const auto scrollBottom = home ? height() : layout.center.bottom() + 1 - s(12);
+		const auto artistPage = home && _homeArtistOpen;
+		const auto scrollBehindBar = home && !artistPage;
+		const auto scrollBottom = scrollBehindBar
+			? height()
+			: (artistPage ? layout.contentBottom : layout.center.bottom() + 1 - s(12));
 		// Последнюю карточку можно прокрутить целиком выше плеера.
-		_tabContent->setPadding(QMargins(
-			0, 0, 0, home && _hasPlaybackTrack ? height() - layout.contentBottom : 0));
+		const auto bottomPadding = scrollBehindBar && _hasPlaybackTrack
+			? height() - layout.contentBottom
+			: 0;
+		_tabContent->setPadding(QMargins(0, 0, 0, bottomPadding));
 		_tabScroll->setGeometry(
 			layout.center.x(),
 			layout.scrollTop,
@@ -8160,7 +8179,7 @@ protected:
 			_searchEmptySticker->setGeometry(searchHintGeometry(layout));
 		}
 		_tabContent->resizeToWidth(_tabScroll->width());
-		if (_homeAlbumHeader) _homeAlbumHeader->setBannerTopInset(_tabScroll->y());
+		if (_homeAlbumHeader) _homeAlbumHeader->setArtistBannerGeometry(width(), _tabScroll->y());
 		updateHomeArtistBar();
 
 		// Навигация: ряд пилюль сверху по центру.
@@ -8508,22 +8527,31 @@ protected:
 	}
 
 	void openTrackArtist(const Track &track, const QString &name) {
-		if (IsTelegramTrack(track)) {
-			showArtistProfile({ {}, name, track.artistArtworkUrl, {} }, track);
+		const auto generation = ++_artistLinkGeneration;
+		const auto externalTrack = IsTelegramTrack(track)
+			|| track.id.startsWith(u"yt:"_q);
+		if (_tab == Tab::Home && _homeArtistOpen
+			&& !_homeArtistProfile.id.isEmpty()
+			&& name.simplified().compare(
+				_homeArtistProfile.name.simplified(), Qt::CaseInsensitive) == 0
+			&& (externalTrack || track.artistId == _homeArtistProfile.id)) {
 			return;
 		}
-		const auto generation = ++_artistLinkGeneration;
+		const auto tab = _tab;
 		const auto searchGeneration = _searchGen;
 		const auto homeGeneration = _homeAlbumGeneration;
 		ResolveTrackArtist(track, name, crl::guard(this, [=, seed = track](ArtistInfo artist) {
-			if (generation != _artistLinkGeneration
-				|| (_tab == Tab::Search && searchGeneration != _searchGen)
-				|| (_tab == Tab::Home && homeGeneration != _homeAlbumGeneration)) {
+			if (generation != _artistLinkGeneration || tab != _tab
+				|| searchGeneration != _searchGen
+				|| homeGeneration != _homeAlbumGeneration) {
 				return;
 			}
 			if (artist.id.isEmpty()) {
-				_controller->showToast(PlaylistText("Профиль «%1» не найден").arg(name));
-				return;
+				if (!externalTrack) {
+					_controller->showToast(PlaylistText("Профиль «%1» не найден").arg(name));
+					return;
+				}
+				artist = { {}, name, seed.artistArtworkUrl, {} };
 			}
 			showArtistProfile(std::move(artist), seed);
 		}));
@@ -9078,7 +9106,8 @@ protected:
 		_nav[1]->setActiveColor(Qt::white);
 		update();
 		LoadImage(ArtUrl(url, u"t500x500"_q), crl::guard(this, [=](QImage image) {
-			if (generation != _homeAlbumGeneration) {
+			if (generation != _homeAlbumGeneration
+				|| (_homeArtistOpen && _homeAlbum.artworkUrl != url)) {
 				return;
 			}
 			_homeAccent = ComputeAccent(image);
@@ -9122,19 +9151,31 @@ protected:
 		if (_homeArtistOpen && !_homeArtistSeed.id.isEmpty()) {
 			_homeArtistTracks.push_back(_homeArtistSeed);
 		}
-		if (!name.isEmpty()) {
-			SearchAlbums(name, 20, crl::guard(this, [=](std::vector<Album> albums, QString error) {
+		const auto artistPage = _homeArtistOpen;
+		const auto searchAlbums = [=] {
+			if (name.isEmpty()) return;
+			SearchAlbums(name, 50, crl::guard(this, [=](std::vector<Album> albums, QString) {
 				if (generation != _homeAlbumGeneration) {
 					return;
 				}
-				const auto artist = name.trimmed().toCaseFolded();
-				auto found = std::set<QString>();
+				const auto artist = name.simplified().toCaseFolded();
 				for (auto &album : albums) {
-					const auto matches = !artistId.isEmpty() && artistId != u"0"_q
-						&& !album.artistId.isEmpty() && album.artistId != u"0"_q
-						? artistId == album.artistId
-						: album.artist.trimmed().toCaseFolded() == artist;
-					if (matches && album.id != albumId && found.insert(album.id).second) {
+					const auto matchesId = !artistId.isEmpty() && artistId != u"0"_q
+						&& artistId == album.artistId;
+					const auto matchesName = album.artist.simplified().toCaseFolded() == artist;
+					if ((!matchesId && !matchesName) || album.id == albumId
+						|| (artistPage && album.releaseKind == ReleaseKind::Unknown)) {
+						continue;
+					}
+					const auto duplicate = std::ranges::any_of(_homeArtistAlbums, [&](const Album &other) {
+						return other.id == album.id || (artistPage
+							&& other.releaseKind == album.releaseKind
+							&& other.title.simplified().compare(album.title.simplified(),
+								Qt::CaseInsensitive) == 0
+							&& (other.releaseYear == album.releaseYear
+								|| !other.releaseYear || !album.releaseYear));
+					});
+					if (!duplicate) {
 						_homeArtistAlbums.push_back(std::move(album));
 					}
 				}
@@ -9142,6 +9183,18 @@ protected:
 					rebuildTab();
 				}
 			}));
+		};
+		if (artistPage && !artistId.isEmpty()) {
+			LoadArtistAlbums(artistId, crl::guard(this, [=](std::vector<Album> albums) {
+				if (generation != _homeAlbumGeneration) {
+					return;
+				}
+				_homeArtistAlbums = std::move(albums);
+				if (_tab == Tab::Home && !_homeArtistAlbums.empty()) rebuildTab();
+				searchAlbums();
+			}));
+		} else {
+			searchAlbums();
 		}
 		if (!artistId.isEmpty()) {
 			UserTracks(artistId, 12, crl::guard(this, [=](std::vector<Track> tracks) {
@@ -9154,11 +9207,15 @@ protected:
 							return credit.compare(name, Qt::CaseInsensitive) == 0;
 						}));
 				});
-				if (_homeArtistOpen && tracks.empty()) {
+				const auto hasPlayable = std::ranges::any_of(tracks, CanPlayTrack);
+				if (_homeArtistOpen && !hasPlayable) {
 					loadHomeArtistYouTube(generation);
 				}
 				if (_homeArtistOpen) {
-					if (tracks.empty() && !_homeArtistSeed.id.isEmpty()) {
+					if (!hasPlayable && !_homeArtistSeed.id.isEmpty()
+						&& std::ranges::none_of(tracks, [&](const Track &track) {
+							return track.id == _homeArtistSeed.id;
+						})) {
 						tracks.push_back(_homeArtistSeed);
 					}
 					std::stable_sort(tracks.begin(), tracks.end(), [](const Track &a, const Track &b) {
@@ -9169,7 +9226,7 @@ protected:
 				if (_tab == Tab::Home && _homeAlbumOpen) {
 					rebuildTab();
 				}
-			}));
+			}), _homeArtistOpen);
 		} else {
 			loadHomeArtistYouTube(generation);
 		}
@@ -9270,14 +9327,22 @@ protected:
 				if (generation != _homeAlbumGeneration || !_homeArtistOpen) {
 					return;
 				}
-				if (!info.avatarUrl.isEmpty()) {
-					_homeAlbum.artworkUrl = info.avatarUrl;
+				if (info.id.isEmpty()) {
+					return;
 				}
+				if (!info.avatarUrl.isEmpty() && _homeAlbum.artworkUrl != info.avatarUrl) {
+					_homeAlbum.artworkUrl = info.avatarUrl;
+					loadHomeAccent(info.avatarUrl, generation);
+				}
+				if (!info.avatarUrl.isEmpty()) {
+					_homeArtistProfile.avatarUrl = info.avatarUrl;
+				}
+				_homeArtistProfile.bannerUrl = info.bannerUrl;
 				_homeArtistBannerUrl = info.bannerUrl;
 				if (_tab == Tab::Home) {
 					rebuildTab();
 				}
-			}));
+			}), true);
 		}
 		loadHomeArtist(artist.name, artist.id, {}, {}, generation);
 		if (track.id.isEmpty()) {
@@ -9605,7 +9670,7 @@ protected:
 						update();
 					})), QMargins(0, 0, 0, style::ConvertScale(8)));
 				_homeAlbumHeader = albumHeader;
-				albumHeader->setBannerTopInset(_tabScroll->y());
+				albumHeader->setArtistBannerGeometry(width(), _tabScroll->y());
 				albumHeader->setArtistPlayable(std::ranges::any_of(
 					HomeArtistPopular(_homeArtistTracks, _homeArtistYouTubeTracks),
 					CanPlayTrack));
@@ -10199,18 +10264,24 @@ protected:
 		} else if (artistHeader) {
 			const auto top = _tabScroll->y();
 			const auto offset = _tabScroll->scrollTop();
-			const auto bannerHeight = artistHeader->artistBannerHeight();
-			const auto bannerBottom = top + bannerHeight - offset;
+			const auto origin = QPoint(_tabScroll->x(), top - offset);
+			const auto bannerBottom = origin.y() + artistHeader->artistBannerHeight();
 			const auto visible = std::clamp(bannerBottom / double(std::max(top, 1)), 0., 1.);
-			const auto panel = QRect(_tabScroll->x(), 0, _tabScroll->width(), top);
+			const auto panel = QRect(0, 0, width(), top);
 			p.save();
 			p.setClipRect(panel, Qt::IntersectClip);
 			p.setOpacity(visible);
-			if (_homeAccent.isValid()) {
-				p.fillRect(panel, anim::color(st::boxBg->c, _homeAccent, 0.26));
-			}
-			artistHeader->paintArtistBanner(p, QPoint(_tabScroll->x(), top - offset));
+			artistHeader->paintArtistBanner(p, origin);
 			p.restore();
+
+			const auto right = _tabScroll->geometry().right() + 1;
+			if (right < width()) {
+				p.save();
+				p.setClipRect(QRect(right, top, width() - right, height() - top),
+					Qt::IntersectClip);
+				artistHeader->paintArtistBanner(p, origin);
+				p.restore();
+			}
 		}
 		if (_tab == Tab::Home && _homeAlbumOpen && !_homeArtistOpen) {
 			const auto headerWidth = std::max(_tabScroll->width() - s(24), 0);

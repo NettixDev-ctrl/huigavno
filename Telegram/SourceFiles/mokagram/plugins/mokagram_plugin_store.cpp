@@ -430,9 +430,10 @@ void StoreBox(
 	const auto weak = base::make_weak(controller);
 	const auto alive = base::make_weak(box);
 
+	const auto headerHeight = S(40);
 	const auto header = content->add(
-		object_ptr<Ui::FixedHeightWidget>(content, S(48)),
-		QMargins(S(16), S(16), S(16), 0));
+		object_ptr<Ui::FixedHeightWidget>(content, headerHeight),
+		QMargins(S(14), S(10), S(14), 0));
 	const auto close = MakeHeaderButton(
 		header,
 		true,
@@ -442,9 +443,11 @@ void StoreBox(
 		U(Mokagram::Lang::Tr("Магазин плагинов")),
 		st::boxTitle);
 	header->widthValue() | rpl::on_next([=](int width) {
-		close->moveToLeft(0, 0);
+		close->moveToLeft(0, (headerHeight - close->height()) / 2);
 		title->resizeToNaturalWidth(std::max(0, width - S(112)));
-		title->moveToLeft((width - title->width()) / 2, (S(48) - title->height()) / 2);
+		title->moveToLeft(
+			(width - title->width()) / 2,
+			(headerHeight - title->height()) / 2);
 	}, header->lifetime());
 	static const auto storeAction = [] {
 		auto result = st::defaultLightButton;
@@ -454,11 +457,25 @@ void StoreBox(
 		result.fullRadius = true;
 		return result;
 	}();
-	const auto sources = content->add(object_ptr<Ui::RoundButton>(content,
-		rpl::single(U(Mokagram::Lang::Tr("Источники плагинов"))), storeAction),
-		QMargins(S(14), S(12), S(14), S(12)),
-		style::al_right);
+	static const auto sourcesStyle = [] {
+		auto result = BoxParts::PillLight();
+		result.height = S(44);
+		result.textTop = S(12);
+		result.radius = S(22);
+		return result;
+	}();
+	const auto sourcesRow = content->add(
+		object_ptr<Ui::FixedHeightWidget>(content, sourcesStyle.height),
+		QMargins(S(14), S(12), S(14), 0));
+	const auto sources = Ui::CreateChild<Ui::RoundButton>(
+		sourcesRow,
+		rpl::single(U(Mokagram::Lang::Tr("Источники плагинов"))),
+		sourcesStyle);
 	sources->setTextTransform(Ui::RoundButtonTextTransform::NoTransform);
+	sourcesRow->widthValue() | rpl::on_next([=](int width) {
+		sources->setFullWidth(width);
+		sources->moveToLeft(0, 0);
+	}, sourcesRow->lifetime());
 	sources->setClickedCallback([=] {
 		if (const auto strong = weak.get()) {
 			strong->show(Box(SourcesBox, strong, changed));

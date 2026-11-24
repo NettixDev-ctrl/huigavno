@@ -1058,7 +1058,8 @@ namespace {
 void CollectionRequest(
 		const QString &path,
 		QUrlQuery query,
-		Fn<void(std::vector<Track>)> done) {
+		Fn<void(std::vector<Track>)> done,
+		bool includeUnavailable = false) {
 	ApiGet(
 		QString::fromLatin1(kApi) + path,
 		std::move(query),
@@ -1068,7 +1069,9 @@ void CollectionRequest(
 				const auto root = QJsonDocument::fromJson(data).object();
 				for (const auto &value : root.value("collection").toArray()) {
 					auto track = ParseTrack(value.toObject());
-					if (!track.transcodingUrl.isEmpty() && !track.id.isEmpty()) {
+					track.unavailable = track.transcodingUrl.isEmpty();
+					if (!track.id.isEmpty() && (!track.unavailable
+						|| (includeUnavailable && !track.title.isEmpty()))) {
 						result.push_back(std::move(track));
 					}
 				}
@@ -1158,21 +1161,24 @@ void LoadRelatedPage(
 void UserTracks(
 		const QString &userId,
 		int limit,
-		Fn<void(std::vector<Track>)> done) {
+		Fn<void(std::vector<Track>)> done,
+		bool includeUnavailable) {
 	auto q = QUrlQuery();
 	q.addQueryItem(u"limit"_q, QString::number(limit));
-	CollectionRequest(u"/users/"_q + userId + u"/tracks"_q, q, std::move(done));
+	CollectionRequest(u"/users/"_q + userId + u"/tracks"_q, q,
+		std::move(done), includeUnavailable);
 }
 
 void LoadArtistInfo(
 		const QString &userId,
-		Fn<void(ArtistInfo)> done) {
+		Fn<void(ArtistInfo)> done,
+		bool refresh) {
 	if (!ValidTrackId(userId)) {
 		done({});
 		return;
 	}
 	if (const auto i = ArtistInfoCache().find(userId);
-		i != ArtistInfoCache().end()) {
+		!refresh && i != ArtistInfoCache().end()) {
 		TouchArtistInfo(userId);
 		done(i->second);
 		return;
@@ -1227,10 +1233,15 @@ void ResolveTrackArtist(
 		const Track &track,
 		const QString &name,
 		Fn<void(ArtistInfo)> done) {
-	const auto matches = [target = name.simplified()](const QString &candidate) {
-		return candidate.simplified().compare(target, Qt::CaseInsensitive) == 0;
+	const auto normalize = [](QString value) {
+		static const auto separators = QRegularExpression(u"[^\\p{L}\\p{N}]+"_q);
+		return value.normalized(QString::NormalizationForm_C).toCaseFolded()
+			.replace(u'ё', u'е').remove(separators);
 	};
-	const auto findByName = [=] {
+	const auto matches = [=, target = normalize(name)](const QString &candidate) {
+		return !target.isEmpty() && normalize(candidate) == target;
+	};
+	const auto findByName = [=](ArtistInfo fallback) {
 		auto query = QUrlQuery();
 		query.addQueryItem(u"q"_q, name);
 		query.addQueryItem(u"limit"_q, QString::number(kPageSize));
@@ -1239,16 +1250,18 @@ void ResolveTrackArtist(
 				QByteArray data,
 				QString error) {
 			auto best = ArtistInfo();
-			auto bestRank = std::pair(false, qint64(0));
+			auto bestRank = std::tuple(false, false, qint64(0));
 			if (error.isEmpty()) {
 				const auto collection = QJsonDocument::fromJson(data).object().value("collection").toArray();
 				for (const auto &value : collection) {
 					const auto object = value.toObject();
-					if (!matches(object.value("username").toString())) {
+					if (!matches(object.value("username").toString())
+						&& !matches(object.value("full_name").toString())) {
 						continue;
 					}
 					auto artist = ParseArtistInfo(object, QString());
-					const auto rank = std::pair(
+					const auto rank = std::tuple(
+						!artist.bannerUrl.isEmpty(),
 						object.value("verified").toBool(),
 						object.value("followers_count").toVariant().toLongLong());
 					if (!artist.id.isEmpty() && (best.id.isEmpty() || rank > bestRank)) {
@@ -1257,22 +1270,41 @@ void ResolveTrackArtist(
 					}
 				}
 			}
-			done(std::move(best));
+			if (!best.id.isEmpty()) {
+				done(fallback.id.isEmpty() || !best.bannerUrl.isEmpty() ? best : fallback);
+				return;
+			}
+			SearchCatalog(name, SearchCategory::All, [=](std::vector<CatalogItem> items, QString) {
+				for (auto &item : items) {
+					if (const auto artist = std::get_if<ArtistInfo>(&item);
+						artist && matches(artist->name)
+						&& (fallback.id.isEmpty() || !artist->bannerUrl.isEmpty())) {
+						done(std::move(*artist));
+						return;
+					}
+				}
+				done(fallback);
+			});
 		});
 	};
-	if (ValidTrackId(track.artistId) && track.uploaderName.isEmpty()) {
-		LoadArtistInfo(track.artistId, [=](ArtistInfo info) {
-			if (!info.id.isEmpty() && matches(info.name)) {
+	if (!ValidTrackId(track.artistId)
+		|| (!track.uploaderName.isEmpty() && !matches(track.uploaderName))) {
+		findByName({});
+		return;
+	}
+	LoadArtistInfo(track.artistId, [=](ArtistInfo info) {
+		if (!info.id.isEmpty() && matches(info.name)) {
+			if (!info.bannerUrl.isEmpty()) {
 				done(std::move(info));
 			} else {
-				findByName();
+				findByName(std::move(info));
 			}
-		});
-	} else if (ValidTrackId(track.artistId) && matches(track.uploaderName)) {
-		done({ track.artistId, track.uploaderName, track.artistArtworkUrl, {} });
-	} else {
-		findByName();
-	}
+		} else {
+			findByName(matches(track.uploaderName)
+				? ArtistInfo{ track.artistId, track.uploaderName, track.artistArtworkUrl, {} }
+				: ArtistInfo());
+		}
+	});
 }
 
 void SearchLimited(
@@ -1371,6 +1403,41 @@ void AlbumsRequest(
 			}
 			done(std::move(result), error);
 		});
+}
+
+void LoadArtistAlbumsPage(
+		const QUrl &endpoint,
+		QUrlQuery query,
+		std::set<QString> visited,
+		std::vector<Album> albums,
+		Fn<void(std::vector<Album>)> done) {
+	ApiGet(endpoint.toString(), std::move(query), [=,
+			visited = std::move(visited),
+			albums = std::move(albums)](QByteArray data, QString error) mutable {
+		if (error.isEmpty()) {
+			const auto root = QJsonDocument::fromJson(data).object();
+			for (const auto &value : root.value("collection").toArray()) {
+				auto album = ParseAlbum(value.toObject());
+				if (ValidTrackId(album.id) && !album.title.isEmpty()
+					&& std::ranges::none_of(albums, [&](const Album &other) {
+						return other.id == album.id;
+					})) {
+					albums.push_back(std::move(album));
+				}
+			}
+			const auto next = QUrl(root.value("next_href").toString());
+			auto nextQuery = QUrlQuery(next);
+			nextQuery.removeAllQueryItems(u"client_id"_q);
+			if (next.scheme() == endpoint.scheme() && next.host() == endpoint.host()
+				&& next.path() == endpoint.path() && !nextQuery.isEmpty()
+				&& visited.insert(nextQuery.toString()).second) {
+				LoadArtistAlbumsPage(endpoint, std::move(nextQuery),
+					std::move(visited), std::move(albums), done);
+				return;
+			}
+		}
+		done(std::move(albums));
+	});
 }
 
 // Подгружает треки по id пачками по 50 и дописывает в found.
@@ -1533,6 +1600,23 @@ void SearchAlbums(
 	q.addQueryItem(u"q"_q, query);
 	q.addQueryItem(u"limit"_q, QString::number(limit));
 	AlbumsRequest(u"/search/albums"_q, q, std::move(done));
+}
+
+void LoadArtistAlbums(
+		const QString &userId,
+		Fn<void(std::vector<Album>)> done) {
+	if (!ValidTrackId(userId)) {
+		done({});
+		return;
+	}
+	const auto endpoint = QUrl(QString::fromLatin1(kApi)
+		+ u"/users/"_q + userId + u"/albums"_q);
+	auto query = QUrlQuery();
+	query.addQueryItem(u"limit"_q, QString::number(kPageSize));
+	query.addQueryItem(u"linked_partitioning"_q, u"1"_q);
+	auto visited = std::set<QString>{ query.toString() };
+	LoadArtistAlbumsPage(endpoint, std::move(query), std::move(visited), {},
+		std::move(done));
 }
 
 void LoadDiscoverPlaylists(Fn<void(std::vector<Album>, QString error)> done) {

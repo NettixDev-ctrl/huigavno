@@ -76,19 +76,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "styles/style_iv.h"
 #include "styles/style_polls.h"
 
-#include <unordered_map>
-
 namespace Mokagram::Badges {
 [[nodiscard]] Ui::BotVerifyDetails Synthetic(not_null<UserData*> user);
 } // namespace Mokagram::Badges
 
 namespace HistoryView {
 namespace {
-
-// Mokagram: сообщения создаются пачками при открытии истории. flat_map
-// с линейной вставкой превращал создание галочек в квадратичную работу.
-std::unordered_map<const void*, std::unique_ptr<Ui::Text::CustomEmoji>> MokaBadgeEmojis;
-
 
 base::options::toggle UnlimitedMessageWidth({
 	.id = kOptionUnlimitedMessageWidth,
@@ -110,8 +103,12 @@ constexpr auto kMinWidthAppearDuration = crl::time(160);
 
 [[nodiscard]] DocumentId FromNameVerificationId(PeerData *from) {
 	const auto details = from ? from->botVerifyDetails() : nullptr;
-	// Mokagram: значок клиента (botId = 0) рисуем сами в paintFromName.
-	return (details && details->botId) ? details->iconId : 0;
+	if (details && details->botId && details->iconId) {
+		return details->iconId;
+	}
+	// Mokagram: бейдж клиента занимает штатное место перед именем.
+	const auto user = from ? from->asUser() : nullptr;
+	return user ? ::Mokagram::Badges::Synthetic(user).iconId : 0;
 }
 
 [[nodiscard]] int FromNameVerificationSkip(
@@ -666,7 +663,6 @@ Message::Message(
 }
 
 Message::~Message() {
-	MokaBadgeEmojis.erase(this);
 	if (_comments
 		|| _fromNameVerification
 		|| (_fromNameStatus && _fromNameStatus->custom)) {
@@ -2607,28 +2603,6 @@ void Message::paintFromName(
 		context,
 		colorIndex(),
 		colorCollectible());
-	// Mokagram: дополнительный бейдж идёт в общем ряду после имени, как
-	// обычный emoji-status. Так длинное имя не налезает на значок.
-	auto mokaBadge = static_cast<Ui::Text::CustomEmoji*>(nullptr);
-	if (from) {
-		if (const auto user = from->asUser()) {
-			const auto details = ::Mokagram::Badges::Synthetic(user);
-			if (details) {
-				auto &emoji = MokaBadgeEmojis[this];
-				if (!emoji) {
-					const auto that = const_cast<Message*>(this);
-					emoji = MakeWrappedEmoji<Ui::Text::FirstFrameEmoji>(
-						history()->owner().customEmojiManager().create(
-							details.iconId,
-							[=] { that->customEmojiRepaint(); }));
-				}
-				mokaBadge = emoji.get();
-			}
-		}
-	}
-	const auto mokaBadgeSkip = mokaBadge
-		? (mokaBadge->width() + st::msgServiceFont->spacew)
-		: 0;
 	const auto nameText = [&] {
 		if (from) {
 			validateFromNameText(from);
@@ -2647,26 +2621,13 @@ void Message::paintFromName(
 	const auto nameAvailableWidth = std::max(
 		((statusWidth && availableWidth > statusWidth)
 			? (availableWidth - statusWidth)
-			: availableWidth) - mokaBadgeSkip - viaSkipWidth,
+			: availableWidth) - viaSkipWidth,
 		0);
 	const auto nameWidth = std::min(
 		nameText->maxWidth(),
 		nameAvailableWidth);
-	const auto iconsLeft = availableLeft + nameWidth;
-	if (mokaBadge) {
-		const auto badgeSize = Ui::Emoji::GetCustomSizeNormal();
-		const auto badgeTop = trect.top()
-			+ (st::msgNameFont->height - badgeSize) / 2;
-		clearCustomEmojiRepaint();
-		mokaBadge->paint(p, {
-			.textColor = nameFg,
-			.now = context.now,
-			.position = QPoint(iconsLeft, badgeTop),
-			.paused = context.paused || On(PowerSaving::kEmojiStatus),
-		});
-	}
 	if (statusWidth && availableWidth > statusWidth) {
-		const auto x = iconsLeft + mokaBadgeSkip;
+		const auto x = availableLeft + nameWidth;
 		const auto y = trect.top();
 		auto color = nameFg;
 		color.setAlpha(115);
@@ -2734,7 +2695,6 @@ void Message::paintFromName(
 		.elisionLines = 1,
 	});
 	const auto skipWidth = nameWidth
-		+ mokaBadgeSkip
 		+ (_fromNameStatus
 			? (st::dialogsPremiumIcon.icon.width()
 				+ st::msgServiceFont->spacew)

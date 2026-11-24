@@ -4,11 +4,15 @@
 // mokagram-id: 80e3dd12
 #include "mokagram/music/mokagram_lyrics.h"
 
+#include <QtCore/QCryptographicHash>
+#include <QtCore/QDir>
 #include <QtCore/QJsonArray>
 #include <QtCore/QJsonDocument>
 #include <QtCore/QJsonObject>
 #include <QtCore/QPointer>
 #include <QtCore/QRegularExpression>
+#include <QtCore/QSaveFile>
+#include <QtCore/QStandardPaths>
 #include <QtCore/QUrl>
 #include <QtCore/QUrlQuery>
 #include <QtNetwork/QNetworkAccessManager>
@@ -221,15 +225,55 @@ void ScaleTimes(Lyrics &lyrics, double ratio) {
 	return result;
 }
 
-void RequestWordLyrics(
+[[nodiscard]] QString WordLyricsPath(
+		const QString &title,
+		const QString &artist,
+		qint64 durationMs) {
+	const auto base = QStandardPaths::writableLocation(QStandardPaths::CacheLocation);
+	if (base.isEmpty()) {
+		return {};
+	}
+	const auto key = QJsonDocument(QJsonArray{ title, artist, durationMs })
+		.toJson(QJsonDocument::Compact);
+	const auto hash = QCryptographicHash::hash(key, QCryptographicHash::Sha256);
+	return base + u"/mokagram_music/word_lyrics/"_q
+		+ QString::fromLatin1(hash.toHex()) + u".json"_q;
+}
+
+crl::queue &WordLyricsDiskQueue() {
+	static const auto result = new crl::queue();
+	return *result;
+}
+
+void SaveWordLyrics(const QString &path, QByteArray bytes) {
+	if (path.isEmpty()) {
+		return;
+	}
+	WordLyricsDiskQueue().async([path, bytes = std::move(bytes)] {
+		const auto directory = QFileInfo(path).absoluteDir();
+		if (!directory.mkpath(u"."_q)) {
+			return;
+		}
+		auto file = QSaveFile(path);
+		if (!file.open(QIODevice::WriteOnly)
+			|| file.write(bytes) != bytes.size()
+			|| !file.commit()) {
+			return;
+		}
+		const auto entries = directory.entryInfoList(
+			{ u"*.json"_q }, QDir::Files, QDir::Time);
+		for (auto i = 96; i < entries.size(); ++i) {
+			QFile::remove(entries[i].absoluteFilePath());
+		}
+	});
+}
+
+void RequestWordLyricsOnline(
 		const QString &title,
 		const QString &artist,
 		qint64 durationMs,
+		const QString &path,
 		Fn<void(Lyrics)> done) {
-	if (title.isEmpty() || artist.isEmpty() || durationMs <= 0) {
-		done({});
-		return;
-	}
 	auto query = QUrlQuery();
 	query.addQueryItem(u"title"_q, title);
 	query.addQueryItem(u"artist"_q, artist);
@@ -251,10 +295,44 @@ void RequestWordLyrics(
 	});
 	QObject::connect(reply, &QNetworkReply::finished, reply, [=] {
 		reply->deleteLater();
-		const auto json = (reply->error() == QNetworkReply::NoError)
-			? QJsonDocument::fromJson(reply->readAll()).object()
-			: QJsonObject();
-		done(ParseWordLyrics(json, title, artist, durationMs));
+		auto bytes = (reply->error() == QNetworkReply::NoError)
+			? reply->readAll()
+			: QByteArray();
+		auto result = ParseWordLyrics(
+			QJsonDocument::fromJson(bytes).object(), title, artist, durationMs);
+		if (result.found) {
+			SaveWordLyrics(path, std::move(bytes));
+		}
+		done(std::move(result));
+	});
+}
+
+void RequestWordLyrics(
+		const QString &title,
+		const QString &artist,
+		qint64 durationMs,
+		Fn<void(Lyrics)> done) {
+	if (title.isEmpty() || artist.isEmpty() || durationMs <= 0) {
+		done({});
+		return;
+	}
+	const auto path = WordLyricsPath(title, artist, durationMs);
+	WordLyricsDiskQueue().async([=] {
+		auto file = QFile(path);
+		const auto bytes = (!path.isEmpty()
+			&& file.open(QIODevice::ReadOnly)
+			&& file.size() <= kMaxTextBytes)
+			? file.readAll()
+			: QByteArray();
+		auto result = ParseWordLyrics(
+			QJsonDocument::fromJson(bytes).object(), title, artist, durationMs);
+		crl::on_main([=, result = std::move(result)] {
+			if (result.found) {
+				done(result);
+			} else {
+				RequestWordLyricsOnline(title, artist, durationMs, path, done);
+			}
+		});
 	});
 }
 

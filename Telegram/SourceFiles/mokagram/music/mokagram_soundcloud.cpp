@@ -1000,7 +1000,8 @@ namespace {
 void CollectionRequest(
 		const QString &path,
 		QUrlQuery query,
-		Fn<void(std::vector<Track>)> done) {
+		Fn<void(std::vector<Track>)> done,
+		bool includeUnavailable = false) {
 	ApiGet(
 		QString::fromLatin1(kApi) + path,
 		std::move(query),
@@ -1010,7 +1011,9 @@ void CollectionRequest(
 				const auto root = QJsonDocument::fromJson(data).object();
 				for (const auto &value : root.value("collection").toArray()) {
 					auto track = ParseTrack(value.toObject());
-					if (!track.transcodingUrl.isEmpty() && !track.id.isEmpty()) {
+					track.unavailable = track.transcodingUrl.isEmpty();
+					if (!track.id.isEmpty() && (!track.unavailable
+						|| (includeUnavailable && !track.title.isEmpty()))) {
 						result.push_back(std::move(track));
 					}
 				}
@@ -1100,21 +1103,24 @@ void LoadRelatedPage(
 void UserTracks(
 		const QString &userId,
 		int limit,
-		Fn<void(std::vector<Track>)> done) {
+		Fn<void(std::vector<Track>)> done,
+		bool includeUnavailable) {
 	auto q = QUrlQuery();
 	q.addQueryItem(u"limit"_q, QString::number(limit));
-	CollectionRequest(u"/users/"_q + userId + u"/tracks"_q, q, std::move(done));
+	CollectionRequest(u"/users/"_q + userId + u"/tracks"_q, q,
+		std::move(done), includeUnavailable);
 }
 
 void LoadArtistInfo(
 		const QString &userId,
-		Fn<void(ArtistInfo)> done) {
+		Fn<void(ArtistInfo)> done,
+		bool refresh) {
 	if (!ValidTrackId(userId)) {
 		done({});
 		return;
 	}
 	if (const auto i = ArtistInfoCache().find(userId);
-		i != ArtistInfoCache().end()) {
+		!refresh && i != ArtistInfoCache().end()) {
 		TouchArtistInfo(userId);
 		done(i->second);
 		return;
@@ -1315,6 +1321,41 @@ void AlbumsRequest(
 		});
 }
 
+void LoadArtistAlbumsPage(
+		const QUrl &endpoint,
+		QUrlQuery query,
+		std::set<QString> visited,
+		std::vector<Album> albums,
+		Fn<void(std::vector<Album>)> done) {
+	ApiGet(endpoint.toString(), std::move(query), [=,
+			visited = std::move(visited),
+			albums = std::move(albums)](QByteArray data, QString error) mutable {
+		if (error.isEmpty()) {
+			const auto root = QJsonDocument::fromJson(data).object();
+			for (const auto &value : root.value("collection").toArray()) {
+				auto album = ParseAlbum(value.toObject());
+				if (ValidTrackId(album.id) && !album.title.isEmpty()
+					&& std::ranges::none_of(albums, [&](const Album &other) {
+						return other.id == album.id;
+					})) {
+					albums.push_back(std::move(album));
+				}
+			}
+			const auto next = QUrl(root.value("next_href").toString());
+			auto nextQuery = QUrlQuery(next);
+			nextQuery.removeAllQueryItems(u"client_id"_q);
+			if (next.scheme() == endpoint.scheme() && next.host() == endpoint.host()
+				&& next.path() == endpoint.path() && !nextQuery.isEmpty()
+				&& visited.insert(nextQuery.toString()).second) {
+				LoadArtistAlbumsPage(endpoint, std::move(nextQuery),
+					std::move(visited), std::move(albums), done);
+				return;
+			}
+		}
+		done(std::move(albums));
+	});
+}
+
 // Подгружает треки по id пачками по 50 и дописывает в found.
 void HydrateTracks(
 		std::shared_ptr<std::map<QString, Track>> found,
@@ -1475,6 +1516,23 @@ void SearchAlbums(
 	q.addQueryItem(u"q"_q, query);
 	q.addQueryItem(u"limit"_q, QString::number(limit));
 	AlbumsRequest(u"/search/albums"_q, q, std::move(done));
+}
+
+void LoadArtistAlbums(
+		const QString &userId,
+		Fn<void(std::vector<Album>)> done) {
+	if (!ValidTrackId(userId)) {
+		done({});
+		return;
+	}
+	const auto endpoint = QUrl(QString::fromLatin1(kApi)
+		+ u"/users/"_q + userId + u"/albums"_q);
+	auto query = QUrlQuery();
+	query.addQueryItem(u"limit"_q, QString::number(kPageSize));
+	query.addQueryItem(u"linked_partitioning"_q, u"1"_q);
+	auto visited = std::set<QString>{ query.toString() };
+	LoadArtistAlbumsPage(endpoint, std::move(query), std::move(visited), {},
+		std::move(done));
 }
 
 void LoadDiscoverPlaylists(Fn<void(std::vector<Album>, QString error)> done) {

@@ -4127,15 +4127,28 @@ void HistoryInner::showContextMenu(QContextMenuEvent *e, bool showFromTouch) {
 	const auto reactItem = Element::Hovered()
 		? Element::Hovered()->data().get()
 		: nullptr;
-	const auto attached = reactItem
-		? AttachSelectorToMenu(
+	// Mokagram: reactions in the selection menu target all selected messages.
+	auto attached = AttachSelectorResult::Skipped;
+	if (isUponSelected > 1 && selectedState.count > 1) {
+		auto ids = MessageIdsList();
+		ids.reserve(_selected.size());
+		for (const auto &item : _selected) {
+			ids.push_back(item->fullId());
+		}
+		attached = AttachSelectedMessagesSelectorToMenu(
+			_menu.get(),
+			controller,
+			desiredPosition,
+			std::move(ids));
+	} else if (reactItem) {
+		attached = AttachSelectorToMenu(
 			_menu.get(),
 			controller,
 			desiredPosition,
 			reactItem,
 			[=](ChosenReaction reaction) { reactionChosen(reaction); },
-			ItemReactionsAbout(reactItem))
-		: AttachSelectorResult::Skipped;
+			ItemReactionsAbout(reactItem));
+	}
 	if (attached == AttachSelectorResult::Failed) {
 		_menu = nullptr;
 		return;

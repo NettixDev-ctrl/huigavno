@@ -10,6 +10,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/expected.h"
 #include "base/unique_qptr.h"
 #include "data/data_message_reactions.h"
+#include "data/data_types.h"
 #include "history/view/reactions/history_view_reactions_strip.h"
 #include "ui/effects/animation_value.h"
 #include "ui/effects/round_area_with_shadow.h"
@@ -265,6 +266,12 @@ AttachSelectorResult AttachSelectorToMenu(
 	Fn<void(ChosenReaction)> chosen,
 	TextWithEntities about,
 	IconFactory iconFactory = nullptr);
+
+AttachSelectorResult AttachSelectedMessagesSelectorToMenu(
+	not_null<Ui::PopupMenu*> menu,
+	not_null<Window::SessionController*> controller,
+	QPoint desiredPosition,
+	MessageIdsList ids);
 
 [[nodiscard]] auto AttachSelectorToMenu(
 	not_null<Ui::PopupMenu*> menu,

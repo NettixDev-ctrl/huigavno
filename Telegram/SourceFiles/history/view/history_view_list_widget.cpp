@@ -4672,15 +4672,23 @@ void ListWidget::showContextMenu(QContextMenuEvent *e, bool showFromTouch) {
 		&& _overState.pointState != PointState::Outside)
 		? _overElement->data().get()
 		: nullptr;
-	const auto attached = reactItem
-		? AttachSelectorToMenu(
+	// Mokagram: reactions in the selection menu target all selected messages.
+	auto attached = AttachSelectorResult::Skipped;
+	if (request.overSelection && request.selectedItems.size() > 1) {
+		attached = AttachSelectedMessagesSelectorToMenu(
+			_menu.get(),
+			controller(),
+			desiredPosition,
+			getSelectedIds());
+	} else if (reactItem) {
+		attached = AttachSelectorToMenu(
 			_menu.get(),
 			controller(),
 			desiredPosition,
 			reactItem,
 			[=](ChosenReaction reaction) { reactionChosen(reaction); },
-			ItemReactionsAbout(reactItem))
-		: AttachSelectorResult::Skipped;
+			ItemReactionsAbout(reactItem));
+	}
 	if (attached == AttachSelectorResult::Failed) {
 		_menu = nullptr;
 		return;

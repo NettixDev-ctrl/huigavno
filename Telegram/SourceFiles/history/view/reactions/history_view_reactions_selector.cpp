@@ -29,9 +29,11 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "lang/lang_keys.h"
 #include "main/main_session.h"
 #include "menu/menu_send.h"
+#include "mokagram/lang/mokagram_lang.h"
 #include "chat_helpers/emoji_list_widget.h"
 #include "chat_helpers/stickers_list_footer.h"
 #include "chat_helpers/stickers_list_widget.h"
+#include "window/section_widget.h"
 #include "window/window_session_controller.h"
 #include "boxes/premium_preview_box.h"
 #include "mainwidget.h"
@@ -1392,11 +1394,13 @@ bool AdjustMenuGeometryForSelector(
 	return menu->prepareGeometryFor(desiredPosition);
 }
 
-AttachSelectorResult AttachSelectorToMenu(
+namespace {
+
+AttachSelectorResult AttachMessageSelectorToMenu(
 		not_null<Ui::PopupMenu*> menu,
 		not_null<Window::SessionController*> controller,
 		QPoint desiredPosition,
-		not_null<HistoryItem*> item,
+		const Data::PossibleItemReactionsRef &reactions,
 		Fn<void(ChosenReaction)> chosen,
 		TextWithEntities about,
 		IconFactory iconFactory) {
@@ -1405,18 +1409,15 @@ AttachSelectorResult AttachSelectorToMenu(
 		desiredPosition,
 		st::reactPanelEmojiPan,
 		controller->uiShow(),
-		Data::LookupPossibleReactions(item, true),
+		reactions,
 		std::move(about),
 		std::move(iconFactory));
 	if (!result) {
 		return result.error();
 	}
 	const auto selector = *result;
-	const auto itemId = item->fullId();
-
 	selector->chosen() | rpl::on_next([=](ChosenReaction reaction) {
 		menu->hideMenu();
-		reaction.context = itemId;
 		chosen(std::move(reaction));
 	}, selector->lifetime());
 
@@ -1435,6 +1436,141 @@ AttachSelectorResult AttachSelectorToMenu(
 	});
 
 	return AttachSelectorResult::Attached;
+}
+
+[[nodiscard]] bool AllowsSelectionReaction(
+		const Data::PossibleItemReactionsRef &possible,
+		const Data::ReactionId &id) {
+	return !id.paid() && ((possible.customAllowed && id.custom())
+		|| ranges::contains(possible.recent, id, &Data::Reaction::id));
+}
+
+[[nodiscard]] Data::PossibleItemReactions LookupSelectedReactions(
+		const HistoryItemsList &items) {
+	Expects(!items.empty());
+	// Each lookup can invalidate temporary reactions returned by the last one.
+	auto result = Data::PossibleItemReactions(
+		Data::LookupPossibleReactions(items.front()));
+	std::erase_if(result.recent, [](const Data::Reaction &reaction) {
+		return reaction.id.paid();
+	});
+	for (const auto &item : items | ranges::views::drop(1)) {
+		const auto possible = Data::LookupPossibleReactions(item);
+		if (result.tags != possible.tags) {
+			return {};
+		}
+		std::erase_if(result.recent, [&](const Data::Reaction &reaction) {
+			return !AllowsSelectionReaction(possible, reaction.id);
+		});
+		if (result.customAllowed && !possible.customAllowed) {
+			// Until now every item accepted any custom emoji. Include the
+			// explicit choices of the first item that restricts them.
+			for (const auto &reaction : possible.recent) {
+				if (reaction->id.custom() && !ranges::contains(
+						result.recent,
+						reaction->id,
+						&Data::Reaction::id)) {
+					result.recent.push_back(*reaction);
+				}
+			}
+		}
+		result.customAllowed = result.customAllowed && possible.customAllowed;
+		if (result.recent.empty() && !result.customAllowed) {
+			break;
+		}
+	}
+	return result;
+}
+
+void ApplySelectedReaction(
+		not_null<Window::SessionController*> controller,
+		const MessageIdsList &ids,
+		const Data::ReactionId &id) {
+	if (id.empty() || id.paid()) {
+		return;
+	}
+	const auto unavailable = [&] {
+		controller->showToast(QString::fromUtf8(Mokagram::Lang::Tr(
+			"Не удалось поставить реакцию на все сообщения")));
+	};
+	const auto items = controller->session().data().idsToItems(ids);
+	if (items.size() != ids.size()) {
+		return unavailable();
+	}
+	auto toReact = HistoryItemsList();
+	for (const auto &item : items) {
+		if (ranges::contains(item->chosenReactions(), id)) {
+			continue;
+		} else if (!AllowsSelectionReaction(
+				Data::LookupPossibleReactions(item), id)) {
+			return unavailable();
+		} else if (Window::ShowReactPremiumError(controller, item, id)) {
+			return;
+		}
+		toReact.push_back(item);
+	}
+	auto source = HistoryReactionSource::Selector;
+	for (const auto &item : toReact) {
+		item->toggleReaction(id, source);
+		source = HistoryReactionSource::Existing;
+	}
+}
+
+} // namespace
+
+AttachSelectorResult AttachSelectorToMenu(
+		not_null<Ui::PopupMenu*> menu,
+		not_null<Window::SessionController*> controller,
+		QPoint desiredPosition,
+		not_null<HistoryItem*> item,
+		Fn<void(ChosenReaction)> chosen,
+		TextWithEntities about,
+		IconFactory iconFactory) {
+	return AttachMessageSelectorToMenu(
+		menu,
+		controller,
+		desiredPosition,
+		Data::LookupPossibleReactions(item, true),
+		[itemId = item->fullId(), chosen = std::move(chosen)](
+				ChosenReaction reaction) {
+			reaction.context = itemId;
+			chosen(std::move(reaction));
+		},
+		std::move(about),
+		std::move(iconFactory));
+}
+
+// Mokagram: let one context-menu choice apply to the whole selection.
+AttachSelectorResult AttachSelectedMessagesSelectorToMenu(
+		not_null<Ui::PopupMenu*> menu,
+		not_null<Window::SessionController*> controller,
+		QPoint desiredPosition,
+		MessageIdsList ids) {
+	const auto items = controller->session().data().idsToItems(ids);
+	if (items.size() < 2 || items.size() != ids.size()) {
+		return AttachSelectorResult::Skipped;
+	}
+	const auto common = LookupSelectedReactions(items);
+	auto options = Data::PossibleItemReactionsRef{
+		.customAllowed = common.customAllowed,
+		.tags = common.tags,
+	};
+	for (const auto &reaction : common.recent) {
+		options.recent.push_back(&reaction);
+	}
+	return AttachMessageSelectorToMenu(
+		menu,
+		controller,
+		desiredPosition,
+		options,
+		[weak = base::make_weak(controller), ids = std::move(ids)](
+				ChosenReaction reaction) {
+			if (const auto strong = weak.get()) {
+				ApplySelectedReaction(strong, ids, reaction.id);
+			}
+		},
+		{ QString::fromUtf8(Mokagram::Lang::Tr("На все выделенные")) },
+		nullptr);
 }
 
 auto AttachSelectorToMenu(

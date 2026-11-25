@@ -18,7 +18,7 @@ public:
 	void setVisible(bool visible);
 	[[nodiscard]] bool loading() const { return _loading; }
 	[[nodiscard]] QImage frame();
-	[[nodiscard]] bool paint(QPainter &p, QRect area);
+	[[nodiscard]] QImage frameForPaint();
 	void paintLoading(QPainter &p, QRect area, QColor color);
 
 private:
@@ -55,7 +55,6 @@ private:
 	Ui::Animations::Basic _loadingAnimation;
 	std::unique_ptr<Media::Streaming::Player> _player;
 	rpl::lifetime _playbackLifetime;
-	QSize _frameSize;
 
 };
 

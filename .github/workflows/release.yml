@@ -149,10 +149,10 @@ jobs:
 
       - name: Check.
         run: |
-          test -f out/Release/Telegram && test -f out/Release/Updater
-          ls -la out/Release/Telegram out/Release/Updater
           mkdir artifact
           cp out/Release/Telegram out/Release/Updater artifact/
+          cp -R out/Release/TelegramHelpers artifact/
+          test -x artifact/TelegramHelpers/TelegramWidgetHelper
 
       - uses: actions/upload-artifact@v7
         name: Upload binaries.
@@ -180,7 +180,7 @@ jobs:
         run: |
           set -e
           VERSION="${TAG#v}"
-          chmod +x bin/Telegram bin/Updater
+          chmod +x bin/Telegram bin/Updater bin/TelegramHelpers/TelegramWidgetHelper
           mkdir -p dist
 
           # Значки и файл рабочего стола (общие для всех форматов).
@@ -206,11 +206,13 @@ jobs:
           # tar.xz
           mkdir -p tarball/mokaGram
           cp bin/Telegram bin/Updater tarball/mokaGram/
+          cp -R bin/TelegramHelpers tarball/mokaGram/
           tar -C tarball -cJf dist/mokagram-linux-x64.tar.xz mokaGram
 
           # AppImage
           mkdir -p AppDir/usr/bin
           cp bin/Telegram bin/Updater AppDir/usr/bin/
+          cp -R bin/TelegramHelpers AppDir/usr/bin/
           sed 's#^Exec=.*#Exec=Telegram -- %U#' pkg/mokagram.desktop > AppDir/mokagram.desktop
           cp pkg/icons/mokagram-512.png AppDir/mokagram.png
           ln -s usr/bin/Telegram AppDir/AppRun
@@ -236,6 +238,9 @@ jobs:
               file_info: { mode: 0755 }
             - src: bin/Updater
               dst: /opt/mokagram/Updater
+              file_info: { mode: 0755 }
+            - src: bin/TelegramHelpers/TelegramWidgetHelper
+              dst: /opt/mokagram/TelegramHelpers/TelegramWidgetHelper
               file_info: { mode: 0755 }
             - src: /opt/mokagram/Telegram
               dst: /usr/bin/mokagram
@@ -399,7 +404,7 @@ jobs:
         continue-on-error: true
         timeout-minutes: 300
         run: |
-          %TBUILD%\%REPO_NAME%\Telegram\build\prepare\win.bat silent qt6
+          %TBUILD%\%REPO_NAME%\Telegram\build\prepare\win.bat silent
 
       - name: Trim libraries (кэш лимит 10 ГБ на репозиторий).
         shell: bash
@@ -452,7 +457,6 @@ jobs:
 
           call configure.bat ^
           -G "Ninja Multi-Config" ^
-          qt6 ^
           -D TDESKTOP_API_ID=${{ secrets.API_ID }} ^
           -D TDESKTOP_API_HASH=${{ secrets.API_HASH }} ^
           -D CMAKE_CONFIGURATION_TYPES=Release ^
@@ -471,6 +475,7 @@ jobs:
           $out = "$env:TBUILD\$env:REPO_NAME\out\Release"
           New-Item -ItemType Directory -Force dist, stage | Out-Null
           Copy-Item "$out\Telegram.exe","$out\Updater.exe" stage
+          Copy-Item "$out\modules","$out\fonts" stage -Recurse
           # Telegram.exe динамически зависит от pythonNNN.dll (плагины на Python): кладём рядом
           # embeddable-сборку той же версии, иначе exe не запускается («не найден python312.dll»).
           $ver = (python --version).Split(' ')[1]
@@ -483,15 +488,23 @@ jobs:
           # Архив с одной папкой mokaGram\: в проводнике виден только mokaGram.exe,
           # остальное (Updater, рантайм Python) помечено скрытым; exe называется mokaGram.exe.
           @'
-          import os, zipfile
-          visible = {"mokaGram.exe"}
-          with zipfile.ZipFile(r"dist\mokagram-win-x64.zip", "w", zipfile.ZIP_DEFLATED, compresslevel=6) as z:
-              for f in sorted(os.listdir("stage")):
-                  zi = zipfile.ZipInfo("mokaGram/" + ("mokaGram.exe" if f == "Telegram.exe" else f), date_time=(2026, 1, 1, 0, 0, 0))
-                  zi.compress_type = zipfile.ZIP_DEFLATED
-                  zi.create_system = 0
-                  zi.external_attr = 0x20 | (0 if (("mokaGram.exe" if f == "Telegram.exe" else f) in visible) else 0x02)
-                  z.writestr(zi, open(os.path.join("stage", f), "rb").read())
+          from pathlib import Path
+          from shutil import copyfileobj
+          from zipfile import ZipFile, ZipInfo, ZIP_DEFLATED
+          stage = Path("stage")
+          with ZipFile(r"dist\mokagram-win-x64.zip", "w", ZIP_DEFLATED, compresslevel=6) as z:
+              for source in sorted(stage.rglob("*")):
+                  if not source.is_file():
+                      continue
+                  name = source.relative_to(stage).as_posix()
+                  if name == "Telegram.exe":
+                      name = "mokaGram.exe"
+                  entry = ZipInfo("mokaGram/" + name, date_time=(2026, 1, 1, 0, 0, 0))
+                  entry.compress_type = ZIP_DEFLATED
+                  entry.create_system = 0
+                  entry.external_attr = 0x20 | (0 if name == "mokaGram.exe" else 0x02)
+                  with source.open("rb") as src, z.open(entry, "w") as dst:
+                      copyfileobj(src, dst)
           '@ | python -
           Get-ChildItem dist
 
@@ -596,7 +609,8 @@ jobs:
           ls
           # Подпись «ad hoc»: без неё приложение на arm64 не запустится. Это не нотаризация,
           # при первом запуске macOS спросит подтверждение (ПКМ -> Открыть).
-          codesign --force --deep -s - mokaGram.app
+          python3 ../../Telegram/build/sign_mac.py --identity - \
+            --entitlements ../../Telegram/Telegram/Telegram.entitlements mokaGram.app
           mkdir -p "$GITHUB_WORKSPACE/dist"
           ditto -c -k --keepParent mokaGram.app "$GITHUB_WORKSPACE/dist/mokagram-macos-arm64.zip"
           python3 -m venv "$RUNNER_TEMP/mokagram-dmg"

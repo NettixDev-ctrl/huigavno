@@ -12,7 +12,6 @@ jobs:
     strategy:
       matrix:
         arch: [x64]
-        qt: [qt6]
         generator: ["Ninja Multi-Config"]
 
     env:
@@ -25,6 +24,20 @@ jobs:
         shell: cmd
 
     steps:
+      - name: Clean up preinstalled software.
+        shell: pwsh
+        run: |
+          $before = (Get-PSDrive C).Free / 1GB
+          Get-Service docker -ErrorAction SilentlyContinue | Stop-Service -ErrorAction SilentlyContinue
+          wsl --shutdown 2> $null
+          Remove-Item "C:\Android\android-sdk", "C:\Program Files\dotnet", "C:\Miniconda", "C:\msys64", "$env:USERPROFILE\.cargo", "$env:USERPROFILE\.rustup", "$env:LOCALAPPDATA\Docker", "C:\ProgramData\DockerDesktop", "C:\Program Files\PostgreSQL", "C:\PostgreSQL", "C:\Program Files\MongoDB", "C:\Program Files\MySQL" -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item "C:\ghcup", "C:\cabal", "C:\Program Files\LLVM", "C:\vcpkg", "C:\tools\kotlinc", "C:\tools\php", "C:\tools\Apache24", "C:\tools\nginx-*", "C:\selenium", "C:\SeleniumWebDrivers", "C:\Program Files\R", "C:\Program Files (x86)\R", "C:\rtools*", "C:\Program Files\Google\Chrome*", "C:\Program Files (x86)\Google\Chrome*", "C:\Program Files\Mozilla Firefox*", "C:\ProgramData\Package Cache" -Recurse -Force -ErrorAction SilentlyContinue
+          # The _Instances registry is how vswhere finds Visual Studio.
+          Get-ChildItem "C:\ProgramData\Microsoft\VisualStudio\Packages" -Exclude _Instances -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item C:\hostedtoolcache\windows\Go*, C:\hostedtoolcache\windows\Ruby*, C:\hostedtoolcache\windows\PyPy*, C:\hostedtoolcache\windows\Java_*, C:\hostedtoolcache\windows\NuGet* -Recurse -Force -ErrorAction SilentlyContinue
+          Write-Host ('{0:N1} GB -> {1:N1} GB free' -f $before, ((Get-PSDrive C).Free / 1GB))
+          exit 0
+
       - name: Python 3.12 для встроенных плагинов.
         uses: actions/setup-python@v5
         with:
@@ -102,26 +115,9 @@ jobs:
         id: cache-libs
         uses: actions/cache@v6
         with:
-          path: |
-            ${{ env.LibrariesPath }}\*
-            !${{ env.LibrariesPath }}\cache_keys
-            !${{ env.LibrariesPath }}\[qQ]t[_-]*
-            ${{ env.LibrariesPath }}\cache_keys\*
-            !${{ env.LibrariesPath }}\cache_keys\[qQ]t[_-]*
-          key: ${{ runner.OS }}-${{ matrix.arch }}-libs-v3-${{ env.CACHE_KEY }}
-          restore-keys: |
-            ${{ runner.OS }}-${{ matrix.arch }}-libs-v3-
-            ${{ runner.OS }}-${{ matrix.arch }}-libs-v2-
-
-      - name: Qt cache.
-        id: cache-qt
-        uses: actions/cache@v6
-        with:
-          path: |
-            ${{ env.LibrariesPath }}\[qQ]t[_-]*
-            ${{ env.LibrariesPath }}\cache_keys\[qQ]t[_-]*
-          key: ${{ runner.OS }}-${{ matrix.arch }}-${{ matrix.qt || 'qt' }}-${{ env.CACHE_KEY }}
-          restore-keys: ${{ runner.OS }}-${{ matrix.arch }}-${{ matrix.qt || 'qt' }}-
+          path: ${{ env.LibrariesPath }}
+          key: ${{ runner.OS }}-${{ matrix.arch }}-libs-${{ env.CACHE_KEY }}
+          restore-keys: ${{ runner.OS }}-${{ matrix.arch }}-libs-
 
       - name: Reset incomplete rust cache keys.
         shell: bash
@@ -134,7 +130,8 @@ jobs:
 
       - name: Libraries.
         run: |
-          %TBUILD%\%REPO_NAME%\Telegram\build\prepare\win.bat skip-release silent ${{ matrix.qt }}
+          set CARGO_INCREMENTAL=0
+          %TBUILD%\%REPO_NAME%\Telegram\build\prepare\win.bat skip-release silent
 
       - name: Read configuration matrix.
         shell: bash
@@ -150,10 +147,6 @@ jobs:
             esac
             echo "Architecture from matrix: $ARCH"
             ARTIFACT_NAME="${ARTIFACT_NAME} ${{ matrix.arch }}"
-          fi
-
-          if [ -n "${{ matrix.qt }}" ]; then
-            ARTIFACT_NAME="${ARTIFACT_NAME} ${{ matrix.qt }}"
           fi
 
           GENERATOR=""
@@ -196,7 +189,6 @@ jobs:
           call configure.bat ^
           %TDESKTOP_BUILD_GENERATOR% ^
           %TDESKTOP_BUILD_ARCH% ^
-          ${{ matrix.qt }} ^
           %TDESKTOP_BUILD_API% ^
           -D CMAKE_CONFIGURATION_TYPES=Debug ^
           -D CMAKE_COMPILE_WARNING_AS_ERROR=ON ^
@@ -217,6 +209,8 @@ jobs:
           New-Item -ItemType Directory -Force artifact | Out-Null
           Move-Item "$out\Telegram.exe" artifact\
           Move-Item "$out\Updater.exe" artifact\
+          Move-Item "$out\modules" artifact\
+          Move-Item "$out\fonts" artifact\
           $ver = (python --version).Split(' ')[1]
           Invoke-WebRequest "https://www.python.org/ftp/python/$ver/python-$ver-embed-amd64.zip" -OutFile py-embed.zip
           Expand-Archive py-embed.zip -DestinationPath artifact -Force

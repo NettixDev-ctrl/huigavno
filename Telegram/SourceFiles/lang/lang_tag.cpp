@@ -976,6 +976,9 @@ QString FormatExactCountDecimal(float64 number) {
 	while (result.endsWith(zero)) {
 		result.chop(1);
 	}
+	if (result.endsWith(locale.decimalPoint())) {
+		return locale.toString(int64(base::SafeRound(number)));
+	}
 	return result;
 }
 
@@ -1034,7 +1037,7 @@ PluralResult Plural(
 		}
 		return { shift, QString::number(round) };
 	}
-	return { shift, FormatDouble(value) };
+	return { shift, FormatDouble(value).replace('.', QLocale().decimalPoint()) };
 }
 
 void UpdatePluralRules(const QString &languageId) {

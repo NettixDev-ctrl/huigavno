@@ -335,6 +335,11 @@ jobs:
         shell: cmd
 
     steps:
+      - name: Python 3.12 for embedded plugins.
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12.10'
+
       - name: Prepare directories.
         run: |
           mkdir %userprofile%\TBuild\Libraries
@@ -381,8 +386,7 @@ jobs:
           # the one above and GitHub rejects the duplicate. The submodules
           # are public repositories and need no credentials.
           #
-          # Recursive: the build compiles the quickjs submodule nested in
-          # widget-sandbox. The Linux job explains the cppgir mirror.
+          # Recursive, as on Linux, whose job explains the cppgir mirror.
           if [ -n "$CPPGIR_MIRROR" ]; then
             git config --global \
               url."$CPPGIR_MIRROR".insteadOf https://gitlab.com/mnauw/cppgir.git
@@ -518,24 +522,9 @@ jobs:
         id: cache-libs
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
-          path: |
-            ${{ env.LibrariesPath }}\*
-            !${{ env.LibrariesPath }}\cache_keys
-            !${{ env.LibrariesPath }}\[qQ]t[_-]*
-            ${{ env.LibrariesPath }}\cache_keys\*
-            !${{ env.LibrariesPath }}\cache_keys\[qQ]t[_-]*
-          key: ${{ runner.OS }}-x64-libs-v2rel-${{ env.CACHE_KEY }}
-          restore-keys: ${{ runner.OS }}-x64-libs-v2rel-
-
-      - name: Qt cache.
-        id: cache-qt
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
-        with:
-          path: |
-            ${{ env.LibrariesPath }}\[qQ]t[_-]*
-            ${{ env.LibrariesPath }}\cache_keys\[qQ]t[_-]*
-          key: ${{ runner.OS }}-x64-qtrel-${{ env.CACHE_KEY }}
-          restore-keys: ${{ runner.OS }}-x64-qtrel-
+          path: ${{ env.LibrariesPath }}
+          key: ${{ runner.OS }}-x64-rel-libs-${{ env.CACHE_KEY }}
+          restore-keys: ${{ runner.OS }}-x64-rel-libs-
 
       - name: Libraries.
         run: |
@@ -586,22 +575,8 @@ jobs:
         if: steps.cache-libs.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
-          path: |
-            ${{ env.LibrariesPath }}\*
-            !${{ env.LibrariesPath }}\cache_keys
-            !${{ env.LibrariesPath }}\[qQ]t[_-]*
-            ${{ env.LibrariesPath }}\cache_keys\*
-            !${{ env.LibrariesPath }}\cache_keys\[qQ]t[_-]*
+          path: ${{ env.LibrariesPath }}
           key: ${{ steps.cache-libs.outputs.cache-primary-key }}
-
-      - name: Save Qt cache.
-        if: steps.cache-qt.outputs.cache-hit != 'true'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
-        with:
-          path: |
-            ${{ env.LibrariesPath }}\[qQ]t[_-]*
-            ${{ env.LibrariesPath }}\cache_keys\[qQ]t[_-]*
-          key: ${{ steps.cache-qt.outputs.cache-primary-key }}
 
       - name: Telegram Desktop build.
         run: |
@@ -616,6 +591,8 @@ jobs:
           -D DESKTOP_APP_ENABLE_LTO=ON ^
           -D DESKTOP_APP_DISABLE_AUTOUPDATE=OFF ^
           -D DESKTOP_APP_DISABLE_CRASH_REPORTS=OFF ^
+          -D Python3_ROOT_DIR="%pythonLocation%" ^
+          -D Python3_FIND_REGISTRY=NEVER ^
           -D TDESKTOP_CANARY_COUNTER=%CANARY_COUNTER% ^
           -D TDESKTOP_CANARY_COMMIT=${{ needs.version.outputs.commit }} ^
           %CANARY_DEFINES%
@@ -667,11 +644,14 @@ jobs:
           export SM_CLIENT_CERT_FILE=/tmp/keylocker.p12
           smctl sign --keypair-alias "$SM_KEYPAIR_ALIAS" --input Telegram.exe
           smctl sign --keypair-alias "$SM_KEYPAIR_ALIAS" --input Updater.exe
-          # Both binaries are verified here, on the exact bytes that get
+          smctl sign --keypair-alias "$SM_KEYPAIR_ALIAS" --input modules/x64/TelegramWidgetHelper.exe
+          # Every binary is verified here, on the exact bytes that get
           # packed: Updater.exe travels only inside the update envelope,
           # the publish job can re-check just the portable's Telegram.exe.
-          signtool verify /pa /all Telegram.exe
-          signtool verify /pa /all Updater.exe
+          # Per command: smctl needs Git Bash to convert SM_CLIENT_CERT_FILE.
+          MSYS_NO_PATHCONV=1 signtool verify /pa /all Telegram.exe
+          MSYS_NO_PATHCONV=1 signtool verify /pa /all Updater.exe
+          MSYS_NO_PATHCONV=1 signtool verify /pa /all modules/x64/TelegramWidgetHelper.exe
           echo "signed=true" >> $GITHUB_OUTPUT
 
       - name: Azure login for update signing.
@@ -692,6 +672,7 @@ jobs:
           # while CI would grab whatever the runner's SDK ships. Canary
           # machines use the system compiler dll.
           ./Packer.exe -path Telegram.exe -path Updater.exe \
+            -path modules/x64/TelegramWidgetHelper.exe \
             -target win64 \
             -version $BASE \
             -channel canary-${{ needs.version.outputs.channel }} \
@@ -722,9 +703,14 @@ jobs:
           # folders from dropping it.
           PORTABLE=td-portable-win-x64-$CANARY_VERSION$CANARY_SUFFIX.zip
           rm -rf portable
-          mkdir -p portable/$CANARY_FOLDER/TelegramForcePortable
+          mkdir -p portable/$CANARY_FOLDER/TelegramForcePortable portable/$CANARY_FOLDER/modules/x64
           touch portable/$CANARY_FOLDER/TelegramForcePortable/.keep
           cp Telegram.exe portable/$CANARY_FOLDER/
+          cp modules/x64/TelegramWidgetHelper.exe portable/$CANARY_FOLDER/modules/x64/
+          cp -R fonts portable/$CANARY_FOLDER/
+          PYTHON_VERSION=$(python --version | awk '{print $2}')
+          curl -fsSL "https://www.python.org/ftp/python/$PYTHON_VERSION/python-$PYTHON_VERSION-embed-amd64.zip" -o py-embed.zip
+          7z x -y -o"portable/$CANARY_FOLDER" py-embed.zip '-x!python.exe' '-x!pythonw.exe'
           (cd portable && 7z a -mx9 ../$PORTABLE $CANARY_FOLDER/)
 
           mkdir -p artifact/update artifact/portable
@@ -783,8 +769,7 @@ jobs:
         env:
           CPPGIR_MIRROR: ${{ vars.CANARY_CPPGIR_MIRROR }}
         run: |
-          # The build compiles the quickjs submodule nested in
-          # widget-sandbox. The Linux job explains the cppgir mirror.
+          # Recursive, as on Linux, whose job explains the cppgir mirror.
           if [ -n "$CPPGIR_MIRROR" ]; then
             git config --global \
               url."$CPPGIR_MIRROR".insteadOf https://gitlab.com/mnauw/cppgir.git
@@ -946,6 +931,7 @@ jobs:
           done
 
           # Stripped here: the universal app is lipo'd from these.
+          # The helper is already stripped and signed by CMake; keep its CDHash.
           for BINARY in MacOS/mokaGram Frameworks/Updater Helpers/crashpad_handler; do
             strip mokaGram.app/Contents/$BINARY
           done
@@ -1044,7 +1030,7 @@ jobs:
 
           # Use the arm64 bundle as the template and include Intel-only
           # Swift runtimes below for older macOS versions.
-          BINARIES="MacOS/mokaGram Frameworks/Updater Helpers/crashpad_handler"
+          BINARIES="MacOS/mokaGram Frameworks/Updater Helpers/crashpad_handler Helpers/TelegramWidgetHelper"
           rm -rf mokaGram.app
           cp -R mokaGram.arm64.app mokaGram.app
           for BINARY in $BINARIES; do
@@ -1096,6 +1082,9 @@ jobs:
               echo "::error::Publishing requires the signing certificate, unsigned apps never ship."
               exit 1
             fi
+            for BUNDLE in mokaGram.x86_64.app mokaGram.arm64.app mokaGram.app; do
+              python3 ../../Telegram/build/sign_mac.py --check "$BUNDLE"
+            done
             echo "::warning::No signing certificate, leaving the apps unsigned."
             echo "signed=false" >> $GITHUB_OUTPUT
             exit 0
@@ -1110,8 +1099,8 @@ jobs:
             -s -k "$KEYCHAIN_PASSWORD" build.keychain
 
           for BUNDLE in mokaGram.x86_64.app mokaGram.arm64.app mokaGram.app; do
-            codesign --force --deep --timestamp --options runtime \
-              --sign "$SIGN_IDENTITY" \
+            python3 ../../Telegram/build/sign_mac.py --timestamp --runtime \
+              --identity "$SIGN_IDENTITY" \
               --entitlements ../../Telegram/Telegram/Telegram.entitlements \
               "$BUNDLE"
             codesign --verify --deep --strict "$BUNDLE"
@@ -1229,8 +1218,7 @@ jobs:
         env:
           CPPGIR_MIRROR: ${{ vars.CANARY_CPPGIR_MIRROR }}
         run: |
-          # The build compiles the quickjs submodule nested in
-          # widget-sandbox and, on this platform only, cppgir nested in
+          # The build compiles, on this platform only, cppgir nested in
           # cmake (cmake/external adds glib under if (LINUX)). Recursing
           # here instead of in the checkout lets the mirror below apply.
           #
@@ -1414,7 +1402,7 @@ jobs:
       - name: Pack v2 update.
         run: |
           cd out/Release
-          ./Packer -path Telegram -path Updater \
+          ./Packer -path Telegram -path Updater -path TelegramHelpers/TelegramWidgetHelper \
             -version ${{ needs.version.outputs.base }} \
             -channel canary-${{ needs.version.outputs.channel }} \
             -counter $CANARY_COUNTER \
@@ -1442,9 +1430,10 @@ jobs:
           # folders from dropping TelegramForcePortable.
           PORTABLE=td-portable-linux-x64-$CANARY_VERSION$CANARY_SUFFIX.tar.xz
           rm -rf portable
-          mkdir -p portable/$CANARY_FOLDER/TelegramForcePortable
+          mkdir -p portable/$CANARY_FOLDER/TelegramForcePortable portable/$CANARY_FOLDER/TelegramHelpers
           touch portable/$CANARY_FOLDER/TelegramForcePortable/.keep
           cp Telegram Updater portable/$CANARY_FOLDER/
+          cp TelegramHelpers/TelegramWidgetHelper portable/$CANARY_FOLDER/TelegramHelpers/
           tar -cJf $PORTABLE -C portable $CANARY_FOLDER
 
           mkdir -p artifact/update artifact/portable
@@ -1519,8 +1508,8 @@ jobs:
         if: needs.version.outputs.unsigned != 'true'
         run: |
           # Publishing unsigned binaries is never allowed: this is a hard
-          # gate, not a warning. Both binaries inside the update envelope
-          # were verified with signtool right after signing in the build
+          # gate, not a warning. Every binary inside the update envelope
+          # was verified with signtool right after signing in the build
           # job; here the portable's Telegram.exe is re-checked as the
           # publish-side witness.
           sudo apt-get update && sudo apt-get install -y osslsigncode

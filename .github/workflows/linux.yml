@@ -171,7 +171,7 @@ jobs:
         run: |
           cd out/Debug
           mkdir artifact
-          mv {Telegram,Updater} artifact/
+          mv {Telegram,Updater,TelegramHelpers} artifact/
       - uses: actions/upload-artifact@v7
         if: env.UPLOAD_ARTIFACT == 'true'
         name: Upload artifact.
@@ -186,7 +186,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           cd out/Debug/artifact
-          tar -cJf mokagram-linux-x64.tar.xz Telegram Updater
+          tar -cJf mokagram-linux-x64.tar.xz Telegram Updater TelegramHelpers
           gh release create "${{ inputs.release_tag }}" mokagram-linux-x64.tar.xz \
             --repo "${{ github.repository }}" --prerelease \
             --title "mokaGram ${{ inputs.release_tag }} (тестовая сборка)" \

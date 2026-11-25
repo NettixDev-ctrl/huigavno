@@ -507,8 +507,7 @@ void TcpConnection::connectToServer(
 		const QString &address,
 		int port,
 		const bytes::vector &protocolSecret,
-		int16 protocolDcId,
-		bool protocolForFiles) {
+		int16 protocolDcId) {
 	if (_status == Status::Finished) {
 		// Queued connectToServer() may arrive after disconnectFromServer().
 		return;
@@ -539,8 +538,7 @@ void TcpConnection::connectToServer(
 		: AbstractSocket::Create(
 			thread(),
 			secret,
-			ToNetworkProxy(_proxy),
-			protocolForFiles);
+			ToNetworkProxy(_proxy));
 
 	const auto postfix = _socket->debugPostfix();
 	_debugId = u"%1(dc:%2,%3%4:%5%6)"_q
@@ -650,9 +648,7 @@ QString TcpConnection::transport() const {
 	if (!isConnected()) {
 		return QString();
 	}
-	auto result = (_socket->debugPostfix() == u"_ws"_q)
-		? u"TCP/WS"_q
-		: u"TCP"_q;
+	auto result = u"TCP"_q;
 	if (qthelp::is_ipv6(_address)) {
 		result += u"/IPv6"_q;
 	}

@@ -914,11 +914,12 @@ ReplyKeyboard::ReplyKeyboard(
 					? base::duplicate(row[j].text).replace(
 						RegExp,
 						QChar(0x2B50))
-					: ((mokaFlagged
-						&& type != Type::Buy)
-						? (QString::fromUtf8("\xE2\x9A\xA0 ") + row[j].text)
-						: row[j].text);
+					: mokaFlagged
+					? (QString::fromUtf8("\xE2\x9A\xA0 ") + row[j].text)
+					: row[j].text;
+				auto prependsIcon = false;
 				const auto withEmoji = [&](const style::IconEmoji &icon) {
+					prependsIcon = true;
 					return Ui::Text::IconEmoji(&icon).append(text);
 				};
 				const auto textWithEntities = [&] {
@@ -973,6 +974,12 @@ ReplyKeyboard::ReplyKeyboard(
 							.session = session,
 							.repaint = [=] { _st->repaint(_item); },
 						}));
+					if (prependsIcon) {
+						button.textWithoutIcon.setText(
+							_st->textStyle(),
+							TextUtilities::SingleLine(text),
+							kPlainTextOptions);
+					}
 				} else {
 					button.text.setText(
 						_st->textStyle(),
@@ -1363,7 +1370,11 @@ void ReplyKeyboard::Style::paintButton(
 		tw = st::botKbStyle.font->elidew;
 	}
 	paintButtonStart(p, st, button.color);
-	button.text.draw(p, {
+	const auto &text = (!button.textWithoutIcon.isEmpty()
+		&& button.text.maxWidth() > tw)
+		? button.textWithoutIcon
+		: button.text;
+	text.draw(p, {
 		.position = {
 			tx,
 			rect.y() + _st->textTop + ((rect.height() - _st->height) / 2),

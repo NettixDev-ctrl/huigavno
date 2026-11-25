@@ -1111,6 +1111,7 @@ void Options::validateState() {
 	_hasCorrect = ranges::any_of(_list, &Option::isCorrect);
 
 	const auto lastEmpty = !_list.empty() && _list.back()->isEmpty();
+	restartReorder();
 	_usedCount = _list.size() - (lastEmpty ? 1 : 0);
 }
 
@@ -2567,7 +2568,7 @@ object_ptr<Ui::RpWidget> CreatePollBox::setupContent() {
 			.chooseLabel = tr::lng_maps_point_send(),
 			.callback = crl::guard(this, [=](
 					Data::LocationPoint point,
-					QString) {
+					Core::GeoAddress) {
 				applyGeo(point.lat(), point.lon());
 			}),
 			.quit = [] { Shortcuts::Launch(Shortcuts::Command::Quit); },

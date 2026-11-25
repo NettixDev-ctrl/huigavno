@@ -253,7 +253,7 @@ protected:
 
 private:
 	struct Divider {
-		const float64 atValue;
+		const float64 atValue = 0.;
 		const QSize size;
 	};
 

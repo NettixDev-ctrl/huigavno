@@ -17,6 +17,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "main/main_session.h"
 #include "ui/boxes/confirm_box.h"
 #include "base/event_filter.h"
+#include "boxes/peers/bot_info_field.h"
+#include "boxes/peers/edit_bot_info_box.h"
 #include "boxes/peers/edit_participants_box.h"
 #include "boxes/peers/edit_peer_color_box.h"
 #include "boxes/peers/edit_peer_common.h"
@@ -85,6 +87,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/widgets/labels.h"
 #include "ui/wrap/padding_wrap.h"
 #include "ui/wrap/slide_wrap.h"
+#include "ui/wrap/vertical_blocks.h"
 #include "ui/wrap/vertical_layout.h"
 #include "ui/ui_utility.h"
 #include "window/window_session_controller.h"
@@ -130,15 +133,6 @@ constexpr auto kWelcomePreviewLength = 8;
 	return peer->session().appConfig().get<int>(
 		u"forum_upgrade_participants_min"_q,
 		200);
-}
-
-void AddSkip(
-		not_null<Ui::VerticalLayout*> container,
-		int top = st::editPeerTopButtonsLayoutSkip,
-		int bottom = st::editPeerTopButtonsLayoutSkipToBottom) {
-	Q_UNUSED(top);
-	Q_UNUSED(bottom);
-	Ui::AddDivider(container);
 }
 
 void AddButtonWithCount(
@@ -501,8 +495,6 @@ private:
 	[[nodiscard]] object_ptr<Ui::RpWidget> createTitleEdit();
 	[[nodiscard]] object_ptr<Ui::RpWidget> createPhotoEdit();
 	[[nodiscard]] object_ptr<Ui::RpWidget> createDescriptionEdit();
-	[[nodiscard]] object_ptr<Ui::RpWidget> createManageGroupButtons();
-	[[nodiscard]] object_ptr<Ui::RpWidget> createStickersEdit();
 
 	[[nodiscard]] bool canEditInformation() const;
 	[[nodiscard]] bool canEditReactions() const;
@@ -512,6 +504,7 @@ private:
 		std::optional<rpl::producer<QString>> error = {});
 	void showEditDiscussionLinkBox();
 	void showEditDirectMessagesBox();
+	void startButtonsBlock();
 	void fillPrivacyTypeButton();
 	void fillDiscussionLinkButton();
 	void fillDirectMessagesButton();
@@ -521,6 +514,7 @@ private:
 	void fillAutoTranslateButton();
 	void fillSignaturesButton();
 	void fillHistoryVisibilityButton();
+	void fillStickersButton();
 	void fillManageSection();
 	void fillCommunitySection();
 	void fillPendingRequestsButton();
@@ -529,7 +523,7 @@ private:
 	void fillBotCurrencyButton();
 	void fillBotCreditsButton();
 	void fillBotAffiliateProgram();
-	void fillBotEditIntroButton();
+	void fillBotEditInfoButton();
 	void fillBotEditCommandsButton();
 	void fillBotEditSettingsButton();
 	void fillBotVerifyAccounts();
@@ -605,6 +599,7 @@ private:
 	const bool _isBot = false;
 
 	base::unique_qptr<Ui::VerticalLayout> _wrap;
+	std::optional<Ui::VerticalBlocks> _blocks;
 	Controls _controls;
 
 	std::deque<FnMut<void()>> _saveStagesQueue;
@@ -666,10 +661,15 @@ object_ptr<Ui::VerticalLayout> Controller::createContent() {
 	auto result = object_ptr<Ui::VerticalLayout>(_box);
 	_wrap.reset(result.data());
 	_controls = Controls();
+	_blocks.emplace(_wrap.get(), Ui::VerticalBlocks::Args{
+		.skip = st::editPeerTopButtonsLayoutSkip,
+		.closingDivider = true,
+	});
 
-	_wrap->add(createPhotoAndTitleEdit());
-	_wrap->add(createDescriptionEdit());
-	_wrap->add(createManageGroupButtons());
+	_blocks->add(createPhotoAndTitleEdit());
+	_blocks->add(createDescriptionEdit());
+	fillManageSection();
+	_blocks->addSeparator();
 
 	return result;
 }
@@ -837,6 +837,11 @@ object_ptr<Ui::RpWidget> Controller::createTitleEdit() {
 	}
 
 	_controls.title = result->entity();
+	if (_isBot) {
+		TrackBotInfoField(
+			_controls.title,
+			Info::Profile::NameValue(_peer));
+	}
 	return result;
 }
 
@@ -877,37 +882,46 @@ object_ptr<Ui::RpWidget> Controller::createDescriptionEdit() {
 	}, field->lifetime());
 
 	_controls.description = field;
+	if (_isBot) {
+		TrackBotInfoField(
+			_controls.description,
+			_peer->session().changes().peerFlagsValue(
+				_peer,
+				Data::PeerUpdate::Flag::About
+			) | rpl::map([=] { return _peer->about(); }));
+	}
 	return result;
 }
 
-object_ptr<Ui::RpWidget> Controller::createManageGroupButtons() {
-	Expects(_wrap != nullptr);
+void Controller::startButtonsBlock() {
+	Expects(_blocks.has_value());
 
-	auto result = object_ptr<Ui::VerticalLayout>(_wrap);
+	_blocks->addSeparator();
+	const auto card = _blocks->add(
+		object_ptr<Ui::SlideWrap<Ui::VerticalLayout>>(
+			_wrap.get(),
+			object_ptr<Ui::VerticalLayout>(_wrap.get())));
 	_controls.buttonsLayout = Settings::Builder::MokaCard(
-		result.data(),
+		card->entity(),
 		st::boxBg);
-
-	fillManageSection();
-
-	return result;
+	card->toggleOn(
+		_controls.buttonsLayout->heightValue() | rpl::map([](int height) {
+			return height > 0;
+		}) | rpl::distinct_until_changed(),
+		anim::type::instant);
 }
 
-object_ptr<Ui::RpWidget> Controller::createStickersEdit() {
-	Expects(_wrap != nullptr);
+void Controller::fillStickersButton() {
+	Expects(_controls.buttonsLayout != nullptr);
 
 	const auto channel = _peer->asChannel();
-	const auto bottomSkip = st::editPeerTopButtonsLayoutSkipCustomBottom;
-
-	auto result = object_ptr<Ui::SlideWrap<Ui::VerticalLayout>>(
-		_wrap,
-		object_ptr<Ui::VerticalLayout>(_wrap));
-	const auto container = result->entity();
+	const auto container = _controls.buttonsLayout;
+	const auto skip = st::editPeerTopButtonsLayoutSkip;
 
 	Ui::AddSubsectionTitle(
 		container,
 		tr::lng_group_stickers(),
-		{ 0, st::defaultSubsectionTitlePadding.top() - bottomSkip, 0, 0 });
+		{ 0, st::defaultSubsectionTitlePadding.top() - skip, 0, 0 });
 
 	AddButtonWithCount(
 		container,
@@ -920,15 +934,9 @@ object_ptr<Ui::RpWidget> Controller::createStickersEdit() {
 		},
 		{ &st::menuIconStickers });
 
-	Ui::AddSkip(container, bottomSkip);
-
-	Ui::AddDividerText(
-		container,
-		tr::lng_group_stickers_description());
-
-	Ui::AddSkip(container, bottomSkip);
-
-	return result;
+	_blocks->addAbout({
+		.text = tr::lng_group_stickers_description(tr::marked),
+	});
 }
 
 bool Controller::canEditInformation() const {
@@ -1427,14 +1435,12 @@ void Controller::fillSignaturesButton() {
 		}
 	}, _controls.buttonsLayout->lifetime());
 
-	Ui::AddSkip(_controls.buttonsLayout);
-	Ui::AddDividerText(
-		_controls.buttonsLayout,
-		rpl::conditional(
+	_blocks->addAbout({
+		.text = rpl::conditional(
 			signs->toggledValue(),
 			tr::lng_edit_sign_profiles_about(tr::marked),
-			tr::lng_edit_sign_messages_about(tr::marked)));
-	Ui::AddSkip(_controls.buttonsLayout);
+			tr::lng_edit_sign_messages_about(tr::marked)),
+	});
 }
 
 void Controller::fillHistoryVisibilityButton() {
@@ -1499,35 +1505,26 @@ void Controller::fillHistoryVisibilityButton() {
 }
 
 void Controller::fillManageSection() {
-	Expects(_controls.buttonsLayout != nullptr);
+	Expects(_blocks.has_value());
 
 	if (_isBot) {
-		const auto &container = _controls.buttonsLayout;
-
-		::AddSkip(container, 0);
+		startButtonsBlock();
 		fillBotUsernamesButton();
 		fillBotCurrencyButton();
 		fillBotCreditsButton();
 		fillBotAffiliateProgram();
-		fillBotEditIntroButton();
+		fillBotEditInfoButton();
 		fillBotEditCommandsButton();
 		fillBotEditSettingsButton();
-		Ui::AddSkip(
-			container,
-			st::editPeerTopButtonsLayoutSkipCustomBottom);
-		container->add(object_ptr<Ui::DividerLabel>(
-			container,
-			object_ptr<Ui::FlatLabel>(
-				container,
-				tr::lng_manage_peer_bot_about(
-					lt_bot,
-					rpl::single(tr::link(
-						'@' + kBotManagerUsername.utf16(),
-						_peer->session().createInternalLinkFull(
-							kBotManagerUsername.utf16()))),
-					tr::rich),
-				st::boxDividerLabel),
-			st::defaultBoxDividerLabelPadding));
+		_blocks->addAbout({
+			.text = tr::lng_manage_peer_bot_about(
+				lt_bot,
+				rpl::single(tr::link(
+					'@' + kBotManagerUsername.utf16(),
+					_peer->session().createInternalLinkFull(
+						kBotManagerUsername.utf16()))),
+				tr::rich),
+		});
 		fillBotVerifyAccounts();
 		if (_peer->asUser()->botInfo->canEditInformation) {
 			fillCommunitySection();
@@ -1599,8 +1596,7 @@ void Controller::fillManageSection() {
 		&& !channel->isMonoforum()
 		&& channel->amCreator();
 
-	::AddSkip(_controls.buttonsLayout, 0);
-
+	startButtonsBlock();
 	if (canEditType) {
 		fillPrivacyTypeButton();
 	//} else if (canEditInviteLinks) {
@@ -1626,15 +1622,9 @@ void Controller::fillManageSection() {
 	}
 	if (canEditSignatures) {
 		fillSignaturesButton();
-	} else if (canEditPreHistoryHidden
-		|| canEditForum
-		|| canEditColorIndex
-		//|| canEditInviteLinks
-		|| canViewOrEditDiscussionLink
-		|| canEditType) {
-		::AddSkip(_controls.buttonsLayout);
 	}
 
+	startButtonsBlock();
 	if (canEditReactions()) {
 		auto allowedReactions = Info::Profile::MigratedOrMeValue(
 			_peer
@@ -1830,15 +1820,13 @@ void Controller::fillManageSection() {
 		fillCommunitySection();
 	}
 
-	if ((canEditStickers || canDelete) && !communityEligible) {
-		::AddSkip(_controls.buttonsLayout);
-	}
-
 	if (canEditStickers) {
-		_controls.buttonsLayout->add(createStickersEdit());
+		startButtonsBlock();
+		fillStickersButton();
 	}
 
 	if (canDelete) {
+		startButtonsBlock();
 		AddButtonDelete(
 			_controls.buttonsLayout,
 			(_isGroup
@@ -1847,19 +1835,16 @@ void Controller::fillManageSection() {
 			[=]{ deleteWithConfirmation(); }
 		);
 	}
-
-	if (canEditStickers || canDelete) {
-		::AddSkip(_controls.buttonsLayout);
-	}
 }
 
 void Controller::fillCommunitySection() {
+	startButtonsBlock();
+
 	const auto container = _controls.buttonsLayout;
 	const auto peer = _peer;
 	const auto isBot = peer->isUser();
 	if (const auto communityId = Data::PeerLinkedCommunityId(peer)) {
 		const auto community = peer->owner().channel(communityId);
-		::AddSkip(container);
 		AddCommunityRow(
 			container,
 			community,
@@ -1906,9 +1891,7 @@ void Controller::fillCommunitySection() {
 			},
 			{ &st::menuIconCommunityRemoveAttention },
 			st::manageGroupAttentionButton);
-		::AddSkip(container);
 	} else {
-		::AddSkip(container);
 		AddButtonWithCount(
 			container,
 			(isBot
@@ -1919,12 +1902,13 @@ void Controller::fillCommunitySection() {
 			rpl::single(QString()),
 			[=] { ShowAddToCommunityBox(_navigation, peer); },
 			{ &st::menuIconCommunity });
-		Ui::AddSkip(container);
-		Ui::AddDividerText(container, isBot
-			? tr::lng_community_add_about_bot()
-			: _isGroup
-			? tr::lng_community_add_about()
-			: tr::lng_community_add_about_channel());
+		_blocks->addAbout({
+			.text = (isBot
+				? tr::lng_community_add_about_bot
+				: _isGroup
+				? tr::lng_community_add_about
+				: tr::lng_community_add_about_channel)(tr::marked),
+		});
 	}
 }
 
@@ -2223,15 +2207,18 @@ void Controller::fillBotAffiliateProgram() {
 		{ .icon = &st::menuIconSharing });
 }
 
-void Controller::fillBotEditIntroButton() {
+void Controller::fillBotEditInfoButton() {
 	Expects(_isBot);
 
 	const auto user = _peer->asUser();
 	AddButtonWithCount(
 		_controls.buttonsLayout,
-		tr::lng_manage_peer_bot_edit_intro(),
-		rpl::never<QString>(),
-		[=] { toggleBotManager(u"%1-intro"_q.arg(user->username())); },
+		tr::lng_manage_peer_bot_edit_info(),
+		BotInfoUnsavedValue(user),
+		[=] {
+			const auto show = _navigation->uiShow();
+			show->showBox(Box(EditBotInfoBox, show, user));
+		},
 		{ &st::menuIconEdit });
 }
 
@@ -2263,11 +2250,11 @@ void Controller::fillBotVerifyAccounts() {
 	Expects(_isBot);
 
 	const auto user = _peer->asUser();
-	const auto wrap = _controls.buttonsLayout->add(
+	_blocks->addSeparator();
+	const auto wrap = _blocks->add(
 		object_ptr<Ui::SlideWrap<Ui::VerticalLayout>>(
-			_controls.buttonsLayout,
-			object_ptr<Ui::VerticalLayout>(
-				_controls.buttonsLayout)));
+			_wrap.get(),
+			object_ptr<Ui::VerticalLayout>(_wrap.get())));
 	wrap->toggleOn(rpl::single(
 		rpl::empty
 	) | rpl::then(user->owner().botCommandsChanges(
@@ -2278,8 +2265,7 @@ void Controller::fillBotVerifyAccounts() {
 		return info && info->verifierSettings;
 	}));
 
-	const auto inner = wrap->entity();
-	Ui::AddSkip(inner);
+	const auto inner = Settings::Builder::MokaCard(wrap->entity(), st::boxBg);
 	AddButtonWithCount(
 		inner,
 		tr::lng_manage_peer_bot_verify(),
@@ -2288,8 +2274,6 @@ void Controller::fillBotVerifyAccounts() {
 			controller->show(MakeVerifyPeersBox(controller, user));
 		},
 		{ &st::menuIconFactcheck });
-	Ui::AddSkip(inner);
-	Ui::AddDivider(inner);
 }
 
 void Controller::submitTitle() {
@@ -3199,7 +3183,7 @@ object_ptr<Ui::SettingsButton> EditPeerInfoBox::CreateButton(
 		rpl::duplicate(text),
 		std::move(labelText),
 		button->widthValue()
-	) | rpl::on_next([&st, label](
+	) | rpl::on_next([&st, label, button](
 			const QString &text,
 			const TextWithEntities &labelText,
 			int width) {
@@ -3209,11 +3193,25 @@ object_ptr<Ui::SettingsButton> EditPeerInfoBox::CreateButton(
 			- st.button.style.font->width(text)
 			- st.labelPosition.x();
 		const auto required = label->textMaxWidth();
-		label->resizeToWidth(std::min(required, available));
-		label->moveToRight(
-			st.labelPosition.x(),
-			st.labelPosition.y(),
-			width);
+		auto padding = st.button.padding;
+		if (required <= available) {
+			label->resizeToWidth(required);
+			label->moveToRight(
+				st.labelPosition.x(),
+				st.labelPosition.y(),
+				width);
+		} else {
+			// WHY: a value that does not fit beside the name goes under it.
+			label->resizeToWidth(std::min(
+				required,
+				width - st.button.padding.left() - st.labelPosition.x()));
+			label->moveToRight(
+				st.labelPosition.x(),
+				st.button.padding.top() + st.button.height,
+				width);
+			padding.setBottom(padding.bottom() + label->height());
+		}
+		button->setPaddingOverride(padding);
 	}, label->lifetime());
 
 	if (badge) {

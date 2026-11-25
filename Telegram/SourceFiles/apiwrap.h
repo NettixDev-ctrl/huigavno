@@ -24,6 +24,10 @@ namespace Main {
 class Session;
 } // namespace Main
 
+namespace Media::Encode {
+struct VideoSource;
+} // namespace Media::Encode
+
 namespace Iv {
 struct RichPage;
 } // namespace Iv
@@ -85,6 +89,8 @@ class ConfirmPhone;
 class PeerPhoto;
 class PeerColors;
 class ShareThemes;
+class Stories;
+class BotInfoLocalizations;
 class Polls;
 class TodoLists;
 class RichTasks;
@@ -373,6 +379,7 @@ public:
 		VoiceWaveform waveform,
 		crl::time duration,
 		bool video,
+		std::shared_ptr<Media::Encode::VideoSource> videoSource,
 		const SendAction &action);
 	void sendVoiceMessage(
 		QByteArray result,
@@ -380,7 +387,8 @@ public:
 		crl::time duration,
 		bool video,
 		const SendAction &action,
-		TextWithTags caption);
+		TextWithTags caption,
+		std::shared_ptr<Media::Encode::VideoSource> videoSource = nullptr);
 	void sendFiles(
 		Ui::PreparedList &&list,
 		SendMediaType type,
@@ -473,6 +481,7 @@ public:
 	[[nodiscard]] Api::ReadMetrics &readMetrics();
 	[[nodiscard]] Api::ConfirmPhone &confirmPhone();
 	[[nodiscard]] Api::PeerPhoto &peerPhoto();
+	[[nodiscard]] Api::Stories &stories();
 	[[nodiscard]] Api::Polls &polls();
 	[[nodiscard]] Api::TodoLists &todoLists();
 	[[nodiscard]] Api::RichTasks &richTasks();
@@ -487,6 +496,7 @@ public:
 	[[nodiscard]] Api::Websites &websites();
 	[[nodiscard]] Api::PeerColors &peerColors();
 	[[nodiscard]] Api::ShareThemes &shareThemes();
+	[[nodiscard]] Api::BotInfoLocalizations &botInfoLocalizations();
 
 	void updatePrivacyLastSeens();
 
@@ -852,6 +862,7 @@ private:
 	const std::unique_ptr<Api::ReadMetrics> _readMetrics;
 	const std::unique_ptr<Api::ConfirmPhone> _confirmPhone;
 	const std::unique_ptr<Api::PeerPhoto> _peerPhoto;
+	const std::unique_ptr<Api::Stories> _stories;
 	const std::unique_ptr<Api::Polls> _polls;
 	const std::unique_ptr<Api::TodoLists> _todoLists;
 	const std::unique_ptr<Api::RichTasks> _richTasks;
@@ -866,6 +877,7 @@ private:
 	const std::unique_ptr<Api::Websites> _websites;
 	const std::unique_ptr<Api::PeerColors> _peerColors;
 	const std::unique_ptr<Api::ShareThemes> _shareThemes;
+	const std::unique_ptr<Api::BotInfoLocalizations> _botInfoLocalizations;
 
 	mtpRequestId _wallPaperRequestId = 0;
 	QString _wallPaperSlug;

@@ -1,10 +1,11 @@
 name: Moka Windows x64 executable
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - codex/windows-exe-20261026
-
+      
 permissions:
   contents: read
 

@@ -5611,6 +5611,10 @@ void HistoryItem::updateReactions(const MTPMessageReactions *reactions) {
 }
 
 bool HistoryItem::changeReactions(const MTPMessageReactions *reactions) {
+	// Mokagram: even an empty update can be older than our pending reaction.
+	if (_history->owner().reactions().sending(this)) {
+		return false;
+	}
 	if (reactions || _reactionsLastRefreshed) {
 		_reactionsLastRefreshed = crl::now();
 	}

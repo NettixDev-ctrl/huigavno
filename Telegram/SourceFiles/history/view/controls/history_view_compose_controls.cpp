@@ -3239,15 +3239,6 @@ void ComposeControls::initKeyHandler() {
 		});
 		return Result::Cancel;
 	});
-
-	base::install_event_filter(_wrap.get(), _field, [=](
-			not_null<QEvent*> e) {
-		using Result = base::EventFilterResult;
-		return (e->type() == QEvent::KeyPress
-			&& static_cast<QKeyEvent*>(e.get())->key() == Qt::Key_Escape)
-			? Result::Cancel
-			: Result::Continue;
-	});
 }
 
 void ComposeControls::initField() {
@@ -3268,10 +3259,23 @@ void ComposeControls::initField() {
 			_fieldSubmits.fire_copy(modifiers);
 		}
 	}, _field->lifetime());
-	_field->cancelled(
-	) | rpl::on_next([=] {
-		escape();
-	}, _field->lifetime());
+	// Mokagram: handle Escape before the text edit can propagate it.
+	base::install_event_filter(_wrap.get(), _field->rawTextEdit(), [=](
+			not_null<QEvent*> e) {
+		using Result = base::EventFilterResult;
+		if (e->type() != QEvent::KeyPress) {
+			return Result::Continue;
+		}
+		const auto key = static_cast<QKeyEvent*>(e.get());
+		if (key->key() != Qt::Key_Escape) {
+			return Result::Continue;
+		}
+		key->accept();
+		if (!key->isAutoRepeat()) {
+			escape();
+		}
+		return Result::Cancel;
+	});
 	_field->heightChanges(
 	) | rpl::on_next([=] {
 		updateHeight();

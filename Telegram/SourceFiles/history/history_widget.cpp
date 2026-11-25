@@ -769,8 +769,20 @@ HistoryWidget::HistoryWidget(
 	) | rpl::on_next([=](Qt::KeyboardModifiers modifiers) {
 		sendWithModifiers(modifiers);
 	}, _field->lifetime());
-	_field->cancelled(
-	) | rpl::on_next([=] {
+	// Mokagram: handle Escape before the text edit ignores and propagates it.
+	base::install_event_filter(_field->rawTextEdit(), [=](not_null<QEvent*> e) {
+		using Result = base::EventFilterResult;
+		if (e->type() != QEvent::KeyPress) {
+			return Result::Continue;
+		}
+		const auto key = static_cast<QKeyEvent*>(e.get());
+		if (key->key() != Qt::Key_Escape) {
+			return Result::Continue;
+		}
+		key->accept();
+		if (key->isAutoRepeat()) {
+			return Result::Cancel;
+		}
 		if (_peer && _peer->amMonoforumAdmin()) {
 			QWidget::setEnabled(false);
 			crl::on_main([=] {
@@ -779,7 +791,8 @@ HistoryWidget::HistoryWidget(
 			});
 		}
 		escape();
-	}, _field->lifetime());
+		return Result::Cancel;
+	});
 	_field->tabbed(
 	) | rpl::on_next([=](not_null<Ui::InputField::TabbedRequest*> request) {
 		if (_supportAutocomplete) {
@@ -9904,8 +9917,11 @@ void HistoryWidget::keyPressEvent(QKeyEvent *e) {
 		_scroll->keyPressEvent(e);
 	};
 	if (e->key() == Qt::Key_Escape) {
-		if (hasFocus()) {
-			escape();
+		if (hasFocus() || _replyTo || _processingReplyTo || _kbReplyTo) {
+			e->accept();
+			if (!e->isAutoRepeat()) {
+				escape();
+			}
 		} else {
 			e->ignore();
 		}
@@ -11687,6 +11703,9 @@ void HistoryWidget::escape() {
 		// Mokagram: Escape cancels the reply without clearing typed text.
 		cancelReply();
 		saveCloudDraft();
+	} else if (_kbReplyTo) {
+		// Mokagram: close the bot reply shown by the same compose bar.
+		toggleKeyboard();
 	} else if (readyToForward() && _history) {
 		_history->setForwardDraft(MsgId(), PeerId(), {});
 	} else if (_suggestOptions && _field->getTextWithTags().empty()) {

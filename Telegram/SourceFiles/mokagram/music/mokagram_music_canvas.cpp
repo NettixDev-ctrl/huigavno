@@ -392,31 +392,18 @@ QImage CanvasPlayer::frame() {
 		: QImage();
 }
 
-bool CanvasPlayer::paint(QPainter &p, QRect area) {
+QImage CanvasPlayer::frameForPaint() {
 	if (!_player || !_player->ready() || _player->failed()) {
-		return false;
+		return {};
 	}
 	updatePlayback();
-	_frameSize = _player->videoSize().scaled(480, 720, Qt::KeepAspectRatio);
+	const auto size = _player->videoSize().scaled(480, 720, Qt::KeepAspectRatio);
 	const auto frame = _player->frame({
-		.resize = _frameSize,
-		.outer = _frameSize,
+		.resize = size,
+		.outer = size,
 	});
 	_player->markFrameShown();
-	if (frame.isNull()) {
-		return false;
-	}
-	const auto scaled = frame.size().scaled(area.size(), Qt::KeepAspectRatioByExpanding);
-	const auto target = QRect(
-		area.topLeft() + QPoint(
-			(area.width() - scaled.width()) / 2,
-			(area.height() - scaled.height()) / 2),
-		scaled);
-	p.save();
-	p.setClipRect(area, Qt::IntersectClip);
-	p.drawImage(target, frame);
-	p.restore();
-	return true;
+	return frame;
 }
 
 void CanvasPlayer::paintLoading(QPainter &p, QRect area, QColor color) {

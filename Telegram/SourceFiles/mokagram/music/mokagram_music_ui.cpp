@@ -10470,9 +10470,11 @@ protected:
 		if (layout.barShown && _tab != Tab::Home) {
 			paintPlaybackBarBackground(p, layout);
 		}
-		if (!_coverMorph.animating()
-			&& e->region().intersects(expandedCoverRect(layout).toAlignedRect())) {
-			paintFullscreenCover(p, layout);
+		const auto cover = expandedCoverRect(layout).toAlignedRect().intersected(rect());
+		if (!_coverMorph.animating() && e->region().intersects(cover)) {
+			// Partial repaints must reuse the frame already shown on the rest of the cover.
+			const auto fullCover = QRegion(cover).subtracted(e->region()).isEmpty();
+			paintFullscreenCover(p, layout, fullCover);
 		}
 		if (!layout.barShown || _tab == Tab::Home) {
 			return;
@@ -10481,7 +10483,10 @@ protected:
 		paintPlaybackBarDetails(p, layout);
 	}
 
-	void paintFullscreenCover(QPainter &p, const Layout &layout) {
+	void paintFullscreenCover(
+			QPainter &p,
+			const Layout &layout,
+			bool fullCover = true) {
 		const auto s = [](int v) { return style::ConvertScale(v); };
 		const auto fade = _infoFade.value(1.);
 		const auto flying = _coverMorph.animating();
@@ -10508,26 +10513,21 @@ protected:
 			}
 			if (current && expanded > 0.) {
 				p.setOpacity(opacity * expanded);
-				auto frame = motionFrame(_spotifyCanvas, layout.cover.size());
-				_spotifyPaletteFrame = frame;
-				if (!frame.isNull()) {
-					p.drawImage(coverRect, frame, CoverSourceRect(frame.size(), coverRect.size()));
-				} else {
-					// Canvas takes integer coordinates; keep the screen-space clip and rect fractional.
-					const auto area = QRect(QPoint(), coverRect.size().toSize().expandedTo(QSize(1, 1)));
-					p.save();
-					p.translate(coverRect.topLeft());
-					p.scale(coverRect.width() / area.width(), coverRect.height() / area.height());
-					const auto canvas = _canvas.paint(p, area);
-					p.restore();
-					if (!canvas) {
-						frame = motionFrame(_motionCover, layout.cover.size());
-						if (!frame.isNull()) {
-							p.drawImage(coverRect, frame, CoverSourceRect(frame.size(), coverRect.size()));
-						} else if (pixmap.isNull()) {
-							st::menuIconSoundOn.paintInCenter(p, coverRect.toAlignedRect(), QColor(0xa1, 0xa1, 0xa6));
-						}
+				if (fullCover) {
+					_spotifyPaletteFrame = motionFrame(_spotifyCanvas, layout.cover.size());
+					_coverVideoFrame = _spotifyPaletteFrame;
+					if (_coverVideoFrame.isNull()) {
+						_coverVideoFrame = _canvas.frameForPaint();
 					}
+					if (_coverVideoFrame.isNull()) {
+						_coverVideoFrame = motionFrame(_motionCover, layout.cover.size());
+					}
+				}
+				if (!_coverVideoFrame.isNull()) {
+					p.drawImage(coverRect, _coverVideoFrame,
+						CoverSourceRect(_coverVideoFrame.size(), coverRect.size()));
+				} else if (pixmap.isNull()) {
+					st::menuIconSoundOn.paintInCenter(p, coverRect.toAlignedRect(), QColor(0xa1, 0xa1, 0xa6));
 				}
 			}
 			p.restore();
@@ -11267,6 +11267,7 @@ private:
 	QColor _canvasAccentTo;
 	Ui::Animations::Simple _canvasFade;
 	QImage _spotifyPaletteFrame;
+	QImage _coverVideoFrame;
 	QString _canvasPaletteFor;
 	crl::time _canvasPaletteNext = 0;
 	QImage _preparedBackdrop;

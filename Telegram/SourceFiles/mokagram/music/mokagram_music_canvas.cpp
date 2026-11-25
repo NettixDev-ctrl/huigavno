@@ -407,7 +407,11 @@ bool CanvasPlayer::paint(QPainter &p, QRect area) {
 		return false;
 	}
 	const auto scaled = frame.size().scaled(area.size(), Qt::KeepAspectRatioByExpanding);
-	const auto target = QRect(area.center() - QPoint(scaled.width(), scaled.height()) / 2, scaled);
+	const auto target = QRect(
+		area.topLeft() + QPoint(
+			(area.width() - scaled.width()) / 2,
+			(area.height() - scaled.height()) / 2),
+		scaled);
 	p.save();
 	p.setClipRect(area, Qt::IntersectClip);
 	p.drawImage(target, frame);

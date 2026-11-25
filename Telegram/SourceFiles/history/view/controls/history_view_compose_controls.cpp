@@ -2975,6 +2975,9 @@ void ComposeControls::init() {
 				replyToMessage(replyTo);
 			} else {
 				cancelReplyMessage();
+				if (reply) {
+					saveCloudDraft();
+				}
 			}
 			history->setForwardDraft(
 				topicRootId,
@@ -3028,6 +3031,7 @@ void ComposeControls::init() {
 	_header->replyCancelled(
 	) | rpl::on_next([=] {
 		cancelReplyMessage();
+		saveCloudDraft();
 	}, _wrap->lifetime());
 
 	_header->replyCancelledExternal(
@@ -6146,16 +6150,15 @@ void ComposeControls::cancelReplyMessage() {
 	_header->replyToMessage({});
 	if (_history) {
 		const auto key = draftKey(DraftType::Normal);
-		if (const auto localDraft = _history->draft(key)) {
-			if (localDraft->reply.messageId) {
-				if (localDraft->textWithTags.text.isEmpty()) {
-					_history->clearDraft(key);
-				} else {
-					localDraft->reply = {};
-				}
+		const auto localDraft = _history->draft(key);
+		const auto draftHadReply = localDraft && localDraft->reply.messageId;
+		if (draftHadReply) {
+			localDraft->reply = {};
+			if (Data::DraftIsNull(localDraft)) {
+				_history->clearDraft(key);
 			}
 		}
-		if (wasReply) {
+		if (wasReply || draftHadReply) {
 			saveDraftWithTextNow();
 		}
 	}
@@ -6192,9 +6195,13 @@ bool ComposeControls::handleCancelRequest() {
 	} else if (isEditingMessage()) {
 		maybeCancelEditMessage();
 		return true;
-	} else if (replyingToMessage().replying()
-		&& _field->getTextWithTags().empty()) {
+	} else if (replyingToMessage().replying()) {
+		// Mokagram: Escape cancels the reply without clearing typed text.
 		cancelReplyMessage();
+		saveCloudDraft();
+		return true;
+	} else if (replyingToMessageExternal().replying()) {
+		cancelReplyMessageExternal();
 		return true;
 	} else if (readyToForward()) {
 		cancelForward();

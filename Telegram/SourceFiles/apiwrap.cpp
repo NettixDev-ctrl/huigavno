@@ -2383,6 +2383,7 @@ void ApiWrap::applyAffectedMessages(
 
 void ApiWrap::saveCurrentDraftToCloud() {
 	Core::App().materializeLocalDrafts();
+	auto replyRemoved = false;
 	for (const auto &controller : _session->windows()) {
 		if (const auto thread = controller->activeChatCurrent().thread()) {
 			const auto topic = thread->asTopic();
@@ -2406,8 +2407,16 @@ void ApiWrap::saveCurrentDraftToCloud() {
 			if (!Data::DraftsAreEqual(localDraft, cloudDraft)
 				&& !_session->supportMode()) {
 				saveDraftToCloudDelayed(thread);
+				replyRemoved = replyRemoved || (cloudDraft
+					&& cloudDraft->reply
+					&& !cloudDraft->hasRichMessage()
+					&& !(localDraft && localDraft->reply));
 			}
 		}
+	}
+	// Mokagram: start saving a removed reply before a stale update restores it.
+	if (replyRemoved) {
+		saveDraftsToCloud();
 	}
 }
 

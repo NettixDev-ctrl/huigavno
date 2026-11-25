@@ -567,15 +567,18 @@ HistoryWidget::HistoryWidget(
 			hit->show();
 			hit->stackUnder(_fieldBarCancel.data());
 		}, hit->lifetime());
-		hit->events() | rpl::on_next([=](not_null<QEvent*> e) {
+		// Mokagram: consume forwarded mouse events so Qt cannot bubble them
+		// to this widget a second time and open two draft options boxes.
+		base::install_event_filter(hit, [=](not_null<QEvent*> e) {
+			using Result = base::EventFilterResult;
 			const auto type = e->type();
 			if (type == QEvent::Leave) {
 				clearOverStates();
-				return;
+				return Result::Continue;
 			} else if (type != QEvent::MouseMove
 				&& type != QEvent::MouseButtonPress
 				&& type != QEvent::MouseButtonRelease) {
-				return;
+				return Result::Continue;
 			}
 			const auto mouse = static_cast<QMouseEvent*>(e.get());
 			const auto pos = hit->mapToParent(mouse->pos());
@@ -594,7 +597,8 @@ HistoryWidget::HistoryWidget(
 			} else {
 				mouseReleaseEvent(&mapped);
 			}
-		}, hit->lifetime());
+			return Result::Cancel;
+		});
 		overlay->paintRequest() | rpl::on_next([=](QRect clip) {
 			if (_list && MokaScrollBottomSkip(_scroll.data()) > 0) {
 				// лента под бабблом растворяется в обои
@@ -9857,8 +9861,8 @@ void HistoryWidget::editDraftOptions() {
 			Data::ForwardDraft forward) {
 		if (replyTo) {
 			replyToMessage(replyTo);
-		} else {
-			cancelReply();
+		} else if (cancelReply()) {
+			saveCloudDraft();
 		}
 		history->setForwardDraft(MsgId(), PeerId(), std::move(forward));
 		_preview->apply(webpage);
@@ -10090,7 +10094,9 @@ bool HistoryWidget::replyToNextMessage() {
 				}
 			} else {
 				_highlighter.clear();
-				cancelReply(false);
+				if (cancelReply()) {
+					saveCloudDraft();
+				}
 			}
 			return true;
 		}
@@ -11339,12 +11345,14 @@ bool HistoryWidget::cancelReplyOrSuggest(bool lastKeyboardUsed) {
 }
 
 bool HistoryWidget::cancelReply(bool lastKeyboardUsed) {
-	bool wasReply = false;
-	if (_replyTo) {
-		wasReply = true;
+	const auto wasReply = bool(_replyTo);
+	// Mokagram: a pending message lookup must not restore a canceled reply.
+	const auto wasProcessingReply = bool(base::take(_processingReplyTo));
+	_processingReplyItem = nullptr;
 
-		_processingReplyItem = _replyEditMsg = nullptr;
-		_processingReplyTo = _replyTo = FullReplyTo();
+	if (wasReply) {
+		_replyEditMsg = nullptr;
+		_replyTo = FullReplyTo();
 		mouseMoveEvent(0);
 		if (!readyToForward()
 			&& !_previewDrawPreview
@@ -11360,17 +11368,15 @@ bool HistoryWidget::cancelReply(bool lastKeyboardUsed) {
 		updateControlsGeometry();
 		update();
 	}
-	if (const auto localDraft
-			= (_history ? _history->localDraft({}, {}) : nullptr)) {
-		if (localDraft->reply) {
-			if (localDraft->textWithTags.text.isEmpty()) {
-				_history->clearLocalDraft(MsgId(), PeerId());
-			} else {
-				localDraft->reply = {};
-			}
+	const auto localDraft = _history ? _history->localDraft({}, {}) : nullptr;
+	const auto draftHadReply = localDraft && bool(localDraft->reply);
+	if (draftHadReply) {
+		localDraft->reply = {};
+		if (Data::DraftIsNull(localDraft)) {
+			_history->clearLocalDraft(MsgId(), PeerId());
 		}
 	}
-	if (wasReply) {
+	if (wasReply || wasProcessingReply || draftHadReply) {
 		saveDraftWithTextNow();
 	}
 	if (!_editMsgId
@@ -11459,6 +11465,7 @@ void HistoryWidget::cancelFieldAreaState() {
 		cancelEdit();
 	} else if (_replyTo) {
 		cancelReply();
+		saveCloudDraft();
 	} else if (readyToForward()) {
 		_history->setForwardDraft(MsgId(), PeerId(), {});
 	} else if (_kbReplyTo) {
@@ -11674,12 +11681,15 @@ void HistoryWidget::escape() {
 		} else {
 			cancelEdit();
 		}
-	} else if (readyToForward() && _history) {
-		_history->setForwardDraft(MsgId(), PeerId(), {});
 	} else if (_autocomplete && !_autocomplete->isHidden()) {
 		_autocomplete->hideAnimated();
-	} else if ((_replyTo || _suggestOptions)
-		&& _field->getTextWithTags().empty()) {
+	} else if (_replyTo || _processingReplyTo) {
+		// Mokagram: Escape cancels the reply without clearing typed text.
+		cancelReply();
+		saveCloudDraft();
+	} else if (readyToForward() && _history) {
+		_history->setForwardDraft(MsgId(), PeerId(), {});
+	} else if (_suggestOptions && _field->getTextWithTags().empty()) {
 		cancelReplyOrSuggest();
 	} else if (auto &voice = _voiceRecordBar; voice->isActive()) {
 		voice->showDiscardBox(nullptr, anim::type::normal);
